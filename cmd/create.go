@@ -576,13 +576,53 @@ func runLocalBootcCreate(name string) error {
 	defer os.Remove(keyFile)
 
 	fmt.Printf("Building bootc image locally onto %s...\n", loopDev)
-	// --generic-image installs every bootloader flavor instead of flashing
-	// host-specific firmware, so the disk boots under plain QEMU (SeaBIOS
-	// or OVMF) — required for portable/CI disks.
+	// Backend-aware install (mirrors pkg/kubevirt/bootc.go's builder). ostree/
+	// server images ship bootupctl and install to xfs with --generic-image (so
+	// the disk boots the removable EFI path under plain QEMU). composefs images
+	// (Universal Blue / TunaOS desktops: no bootupctl, systemd-boot on the ESP)
+	// REQUIRE btrfs — their initramfs is btrfs-only, so installing them the
+	// ostree/xfs way drops to dracut emergency mode at initrd-switch-root
+	// (tuna-os sailfin desktop Gate). They also need the real kernel/initrd
+	// re-extracted over bootc's EROFS-zeroed ESP copies, and the SSH key written
+	// into the deployment (--root-ssh-authorized-keys is a no-op on composefs).
 	cmd := exec.Command("sudo", "podman", "run", "--privileged", "--pid=host", "--security-opt", "label=disable",
 		"-v", "/dev:/dev", "-v", vmDir+":/output:Z",
 		createBootc, "sh", "-c",
-		fmt.Sprintf("bootc install to-disk --filesystem xfs --wipe --generic-image --root-ssh-authorized-keys /output/id_rsa.pub %s && udevadm settle && mkdir -p /mnt && mount %sp3 /mnt %s && umount /mnt", loopDev, loopDev, provisionArg))
+		fmt.Sprintf(`set -e
+DISK=%s
+if command -v bootupctl >/dev/null 2>&1; then
+  COMPOSEFS=0; FS=xfs; BACKEND=--generic-image
+elif [ -f /usr/lib/systemd/boot/efi/systemd-bootx64.efi ] || [ -f /usr/lib/systemd/boot/efi/systemd-bootaa64.efi ]; then
+  COMPOSEFS=1; FS=btrfs; BACKEND=--composefs-backend
+else
+  COMPOSEFS=0; FS=xfs; BACKEND=--generic-image
+fi
+echo "corral: install backend composefs=$COMPOSEFS fs=$FS"
+bootc install to-disk $BACKEND --filesystem "$FS" --wipe --root-ssh-authorized-keys /output/id_rsa.pub "$DISK"
+udevadm settle
+if [ "$COMPOSEFS" = 1 ]; then
+  mkdir -p /mnt/esp
+  for P in 1 2 3; do
+    if mount "${DISK}p${P}" /mnt/esp 2>/dev/null; then
+      if [ -d /mnt/esp/EFI ]; then break; fi
+      umount /mnt/esp
+    fi
+  done
+  KVER=$(ls /usr/lib/modules | head -1)
+  D=$(ls -d /mnt/esp/EFI/Linux/bootc_composefs-* 2>/dev/null | head -1)
+  if [ -n "$D" ]; then
+    cp -f "/usr/lib/modules/$KVER/vmlinuz" "$D/vmlinuz"
+    cp -f "/usr/lib/modules/$KVER/initramfs.img" "$D/initrd"
+  fi
+  sync; umount /mnt/esp 2>/dev/null || true
+  mkdir -p /mnt/root; mount "${DISK}p3" /mnt/root
+  SSHDIR=/mnt/root/state/os/default/var/roothome/.ssh
+  mkdir -p "$SSHDIR"; chmod 700 "$SSHDIR"
+  cp /output/id_rsa.pub "$SSHDIR/authorized_keys"; chmod 600 "$SSHDIR/authorized_keys"; chown -R 0:0 "$SSHDIR"
+  sync; umount /mnt/root
+fi
+udevadm settle
+mkdir -p /mnt && mount "${DISK}p3" /mnt %s && umount /mnt`, loopDev, provisionArg))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
