@@ -11,6 +11,17 @@ import (
 type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale"`
 	Firmware  FirmwareConfig  `yaml:"firmware"`
+	Web       WebConfig       `yaml:"web"`
+}
+
+// WebConfig holds web UI theme and branding overrides.
+type WebConfig struct {
+	Accent         string `yaml:"accent"`
+	Accent2        string `yaml:"accent_2"`
+	BrandTitle     string `yaml:"brand_title"`
+	BrandEmoji     string `yaml:"brand_emoji"`
+	BrandSubtitle  string `yaml:"brand_subtitle"`
+	CustomCSS      string `yaml:"custom_css"`
 }
 
 // FirmwareConfig holds firmware boot defaults.
@@ -29,10 +40,15 @@ type TailscaleConfig struct {
 	Tags string `yaml:"tags"`
 }
 
+// ConfigDir returns the directory containing config.yaml.
+func ConfigDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "corral")
+}
+
 // DefaultPath returns the default config file path.
 func DefaultPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "corral", "config.yaml")
+	return filepath.Join(ConfigDir(), "config.yaml")
 }
 
 // Load reads the config file from path. Returns empty config if file doesn't exist.

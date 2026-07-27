@@ -5,7 +5,14 @@ import (
 	"github.com/tuna-os/corral/pkg/web"
 )
 
-var webAddr string
+var (
+	webAddr         string
+	webAccent       string
+	webBrandTitle   string
+	webBrandEmoji   string
+	webBrandSubtitle string
+	webCustomCSS    string
+)
 
 var webCmd = &cobra.Command{
 	Use:   "web",
@@ -28,11 +35,14 @@ There is no authentication — never bind a public interface.
 you can explore the dashboard — or develop on it — with no cluster at all.`,
 	Example: `  corral web
   corral web --addr "$(tailscale ip -4):8006"
-  corral web --demo   # explore the UI without a cluster`,
+  corral web --demo   # explore the UI without a cluster
+  corral web --accent "#3b82f6" --brand-emoji "⚡"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if rootDemo {
 			web.EnableDemo()
 		}
+		// CLI flags override config file; the theme is assembled inside web.Serve.
+		web.SetCLITheme(webAccent, webBrandTitle, webBrandEmoji, webBrandSubtitle, webCustomCSS)
 		return web.Serve(webAddr)
 	},
 }
@@ -40,4 +50,9 @@ you can explore the dashboard — or develop on it — with no cluster at all.`,
 func init() {
 	rootCmd.AddCommand(webCmd)
 	webCmd.Flags().StringVar(&webAddr, "addr", "127.0.0.1:8006", "Listen address")
+	webCmd.Flags().StringVar(&webAccent, "accent", "", "Accent colour (CSS hex, e.g. #3b82f6)")
+	webCmd.Flags().StringVar(&webBrandTitle, "brand-title", "", "Brand title shown in the header")
+	webCmd.Flags().StringVar(&webBrandEmoji, "brand-emoji", "", "Emoji shown left of the brand title")
+	webCmd.Flags().StringVar(&webBrandSubtitle, "brand-subtitle", "", "Subtitle text next to the brand title")
+	webCmd.Flags().StringVar(&webCustomCSS, "custom-css", "", "Path to a CSS file whose contents are injected into the page")
 }

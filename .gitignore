@@ -33,3 +33,5 @@ WEBUI-PLAN.md
 corral.txt
 *.transcript
 test-results/
+corral
+corral-incus

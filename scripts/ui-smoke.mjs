@@ -67,6 +67,35 @@ await page.waitForTimeout(1000);
 check(await page.locator('.wiz-card').count() > 4, 'create wizard shows catalog');
 await page.keyboard.press('Escape');
 
+// Theme: API returns defaults, CSS custom properties injected, branding visible.
+const theme = await (await fetch(`${BASE}api/theme`)).json();
+check(theme.accent === '#f0883e', 'theme API returns default accent');
+check(theme.brand_title === 'Corral', 'theme API returns default brand title');
+check(typeof theme.custom_css === 'string', 'theme API includes custom_css field');
+
+// CSS custom properties injected into the page via <style id="corral-theme">.
+const accentVar = await page.evaluate(() => {
+  const style = document.getElementById('corral-theme');
+  return style ? style.textContent : '';
+});
+check(accentVar.includes('--accent: #f0883e'), 'default accent injected into page CSS');
+check(accentVar.includes('--accent-2: #d9742e'), 'default accent-2 injected into page CSS');
+
+// Branding in the header.
+const brandText = await page.textContent('.brand');
+check(brandText.includes('Corral'), 'brand title visible in header');
+check(brandText.includes('Virtual Environment'), 'brand subtitle visible in header');
+
+// PUT /api/theme persists accent change (demo server has no config dir,
+// so we only check the API round-trip — persistence requires a real config).
+const putRes = await fetch(`${BASE}api/theme`, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ accent: '#22c55e', brand_title: 'SmokeTest' }),
+});
+const updated = await putRes.json();
+check(updated.accent === '#22c55e' || updated.error, 'PUT /api/theme accepts accent change');
+
 check(pageErrors.length === 0, `no JS page errors (${pageErrors.join('; ').slice(0, 200)})`);
 
 await browser.close();

@@ -49,6 +49,13 @@ func Serve(addr string) error {
 		store = s
 	}
 	kubevirt.ProxyTags = config.TailnetTags()
+
+	// Assemble theme: config.yaml → CLI flags override → serve.
+	if cfg, err := config.Load(""); err == nil {
+		loadThemeFromConfig(cfg)
+	}
+	applyCLITheme() // CLI flags always win over config file
+
 	mux, err := newMux()
 	if err != nil {
 		return err
@@ -67,7 +74,17 @@ func newMux() (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+
+	// Static files (css, js, vendor/) served from the embedded FS.
+	// Index.html is intercepted and theme-injected by the serveRoot wrapper.
+	fileServer := http.FileServer(http.FS(sub))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			serveIndex(w, r)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 
 	// Proxmox API compatibility — expose /api2/json/… alongside the
 	// corral REST API so ecosystem tools can manage VMs through the
@@ -75,6 +92,8 @@ func newMux() (http.Handler, error) {
 	mux.Handle("/api2/json/", proxmox.NewHandler(kubevirt.DefaultNamespace))
 
 	mux.HandleFunc("GET /api/whoami", handleWhoami)
+	mux.HandleFunc("GET /api/theme", handleGetTheme)
+	mux.HandleFunc("PUT /api/theme", handlePutTheme)
 	mux.HandleFunc("GET /api/vms", handleListVMs)
 	mux.HandleFunc("POST /api/vms", handleCreateVM)
 	mux.HandleFunc("GET /api/cts", handleListCTs)
@@ -163,6 +182,18 @@ func newMux() (http.Handler, error) {
 	// The admin gate lets safe (GET) requests through and rejects mutating
 	// requests from non-admins when CORRAL_ADMINS is set.
 	return adminGate(mux), nil
+}
+
+// serveIndex reads the embedded index.html, injects the active theme, and
+// serves it. This is the only dynamic page — everything else is static.
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	html, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		http.Error(w, "index.html not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(injectTheme(string(html))))
 }
 
 func jsonResp(w http.ResponseWriter, code int, v any) {
