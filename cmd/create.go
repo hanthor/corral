@@ -51,6 +51,7 @@ var (
 	createNetworkNAD        string
 	createBridgeIface       string
 	createLANService        bool
+	createFirmware          string
 )
 
 // limaFile is the Lima YAML format — corral reads Lima files natively.
@@ -291,6 +292,7 @@ func init() {
 	rootCmd.AddCommand(createCmd)
 	createCmd.Flags().BoolVarP(&createKubevirt, "kubevirt", "k", false, "Use KubeVirt backend")
 	createCmd.Flags().BoolVar(&createIncus, "incus", false, "Use Incus backend plugin")
+	createCmd.Flags().StringVar(&createFirmware, "firmware", "", "Firmware boot type: uefi (default) or bios")
 	createCmd.Flags().StringVar(&createMem, "mem", "4G", "Memory allocation")
 	createCmd.Flags().IntVar(&createCPU, "cpu", 2, "CPU cores")
 	createCmd.Flags().StringVar(&createDisk, "disk", "", "Disk size (default: 20G)")

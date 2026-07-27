@@ -10,6 +10,12 @@ import (
 // Config holds corral configuration.
 type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale"`
+	Firmware  FirmwareConfig  `yaml:"firmware"`
+}
+
+// FirmwareConfig holds firmware boot defaults.
+type FirmwareConfig struct {
+	Default string `yaml:"default"` // "uefi" (default) or "bios"
 }
 
 // TailscaleConfig holds Tailscale-specific settings.
@@ -82,4 +88,15 @@ func TailnetTags() string {
 		return cfg.Tailscale.Tags
 	}
 	return ""
+}
+
+// DefaultFirmware returns the firmware boot default ("uefi" by default, or CORRAL_FIRMWARE_DEFAULT / firmware.default).
+func DefaultFirmware() string {
+	if v := os.Getenv("CORRAL_FIRMWARE_DEFAULT"); v != "" {
+		return v
+	}
+	if cfg, err := Load(""); err == nil && cfg.Firmware.Default != "" {
+		return cfg.Firmware.Default
+	}
+	return "uefi"
 }

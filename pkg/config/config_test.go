@@ -177,3 +177,34 @@ func TestAuthKey_FromDefaultPath(t *testing.T) {
 		t.Errorf("AuthKey() = %q, expected 'tskey-default-123'", key)
 	}
 }
+
+func TestDefaultFirmware(t *testing.T) {
+	t.Run("default is uefi", func(t *testing.T) {
+		t.Setenv("CORRAL_FIRMWARE_DEFAULT", "")
+		t.Setenv("HOME", t.TempDir())
+		if fw := DefaultFirmware(); fw != "uefi" {
+			t.Errorf("DefaultFirmware() = %q, want 'uefi'", fw)
+		}
+	})
+
+	t.Run("override via env", func(t *testing.T) {
+		t.Setenv("CORRAL_FIRMWARE_DEFAULT", "bios")
+		if fw := DefaultFirmware(); fw != "bios" {
+			t.Errorf("DefaultFirmware() = %q, want 'bios'", fw)
+		}
+	})
+
+	t.Run("override via config", func(t *testing.T) {
+		t.Setenv("CORRAL_FIRMWARE_DEFAULT", "")
+		tmp := t.TempDir()
+		confDir := filepath.Join(tmp, ".config", "corral")
+		os.MkdirAll(confDir, 0755)
+		cfgData, _ := yaml.Marshal(Config{Firmware: FirmwareConfig{Default: "bios"}})
+		os.WriteFile(filepath.Join(confDir, "config.yaml"), cfgData, 0644)
+		t.Setenv("HOME", tmp)
+
+		if fw := DefaultFirmware(); fw != "bios" {
+			t.Errorf("DefaultFirmware() = %q, want 'bios'", fw)
+		}
+	})
+}
