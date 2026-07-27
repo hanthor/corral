@@ -139,7 +139,13 @@ func Create(opts CreateOpts) error {
 		args = append(args, "-c", fmt.Sprintf("limits.cpu=%d", opts.CPU))
 	}
 	if opts.Memory != "" {
-		args = append(args, "-c", fmt.Sprintf("limits.memory=%s", opts.Memory))
+		mem := strings.TrimSpace(opts.Memory)
+		if strings.HasSuffix(mem, "Gi") {
+			mem = strings.TrimSuffix(mem, "Gi") + "GiB"
+		} else if strings.HasSuffix(mem, "Mi") {
+			mem = strings.TrimSuffix(mem, "Mi") + "MiB"
+		}
+		args = append(args, "-c", fmt.Sprintf("limits.memory=%s", mem))
 	}
 
 	cmd := exec.Command("incus", args...)
