@@ -22,12 +22,12 @@ type CreateOpts struct {
 	Name         string
 	Namespace    string
 	Image        string
-	CPU          int    // vCPU cores → pod CPU limit/request
-	Mem          string // e.g. "512Mi" → pod memory limit/request
-	Disk         string // PVC size, e.g. "5Gi"
-	StorageClass string // "" = cluster default
-	Privileged   bool   // PVE's "Privileged" checkbox
-	Init         bool   // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
+	CPU          int                 // vCPU cores → pod CPU limit/request
+	Mem          string              // e.g. "512Mi" → pod memory limit/request
+	Disk         string              // PVC size, e.g. "5Gi"
+	StorageClass string              // "" = cluster default
+	Privileged   bool                // PVE's "Privileged" checkbox
+	Init         bool                // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
 	Mounts       []DevContainerMount // additional volume mounts from devcontainer.json
 }
 
@@ -51,12 +51,12 @@ type CT struct {
 // without the caller re-specifying everything. Same pattern as bootc's
 // corral.bootc/image annotation.
 type ctSpec struct {
-	Image      string `json:"image"`
-	CPU        int    `json:"cpu"`
-	Mem        string `json:"mem"`
-	Privileged bool                 `json:"privileged"`
-	Init       bool                 `json:"init,omitempty"`
-	Mounts     []DevContainerMount  `json:"mounts,omitempty"`
+	Image      string              `json:"image"`
+	CPU        int                 `json:"cpu"`
+	Mem        string              `json:"mem"`
+	Privileged bool                `json:"privileged"`
+	Init       bool                `json:"init,omitempty"`
+	Mounts     []DevContainerMount `json:"mounts,omitempty"`
 }
 
 const (
@@ -240,7 +240,7 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 			"requests": map[string]any{"cpu": strconv.Itoa(cpu), "memory": mem},
 		},
 		"securityContext": map[string]any{"privileged": spec.Privileged},
-		"volumeMounts":   volumeMounts,
+		"volumeMounts":    volumeMounts,
 	}
 	if command != nil {
 		ctr["command"] = command // nil = the image's own entrypoint (Init)
