@@ -174,15 +174,85 @@ func TestResolvePostCreate_ArrayForm(t *testing.T) {
 	}
 }
 
-func TestResolvePostCreate_ObjectFormUnsupported(t *testing.T) {
-	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postCreateCommand": {"one": "npm install", "two": "go build"}}`))
+func TestResolvePostCreate_ObjectForm_NowSupported(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postCreateCommand": {"install": "npm ci", "build": "go build ./..."}}`))
 	if err != nil {
 		t.Fatalf("LoadDevContainerConfig: %v", err)
 	}
+	cmds, err := cfg.ResolvePostCreateCommands()
+	if err != nil {
+		t.Fatalf("ResolvePostCreateCommands: %v", err)
+	}
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %+v", len(cmds), cmds)
+	}
+	names := map[string]string{}
+	for _, c := range cmds {
+		names[c.Name] = c.Script
+	}
+	if names["install"] != "npm ci" || names["build"] != "go build ./..." {
+		t.Errorf("commands = %+v", cmds)
+	}
+	// Old API still errors for object form — single-command callers use that.
 	if _, err := cfg.ResolvePostCreate(); err == nil {
-		t.Error("object-form postCreateCommand should error (not silently run nothing)")
-	} else if !strings.Contains(err.Error(), "supported") {
-		t.Errorf("error should explain the object form isn't supported, got: %v", err)
+		t.Error("ResolvePostCreate should still error for object form (use ResolvePostCreateCommands)")
+	}
+}
+
+func TestResolvePostCreateCommands_StringForm(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postCreateCommand": "npm install"}`))
+	if err != nil {
+		t.Fatalf("LoadDevContainerConfig: %v", err)
+	}
+	cmds, err := cfg.ResolvePostCreateCommands()
+	if err != nil {
+		t.Fatalf("ResolvePostCreateCommands: %v", err)
+	}
+	if len(cmds) != 1 || cmds[0].Name != "" || cmds[0].Script != "npm install" {
+		t.Errorf("commands = %+v", cmds)
+	}
+}
+
+func TestResolvePostStart_Script(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postStartCommand": "echo ready"}`))
+	if err != nil {
+		t.Fatalf("LoadDevContainerConfig: %v", err)
+	}
+	post, err := cfg.ResolvePostStart()
+	if err != nil {
+		t.Fatalf("ResolvePostStart: %v", err)
+	}
+	if post.Script != "echo ready" {
+		t.Errorf("Script = %q, want 'echo ready'", post.Script)
+	}
+}
+
+func TestResolvePostStart_Empty(t *testing.T) {
+	cfg := &DevContainerConfig{}
+	post, err := cfg.ResolvePostStart()
+	if err != nil {
+		t.Fatalf("ResolvePostStart: %v", err)
+	}
+	if post != nil {
+		t.Errorf("expected nil for no postStartCommand, got %+v", post)
+	}
+}
+
+func TestResolvePostStart_ObjectForm_NowSupported(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postStartCommand": {"notify": "echo started"}}`))
+	if err != nil {
+		t.Fatalf("LoadDevContainerConfig: %v", err)
+	}
+	cmds, err := cfg.ResolvePostStartCommands()
+	if err != nil {
+		t.Fatalf("ResolvePostStartCommands: %v", err)
+	}
+	if len(cmds) != 1 || cmds[0].Name != "notify" {
+		t.Errorf("commands = %+v", cmds)
+	}
+	// Old API still errors for object form.
+	if _, err := cfg.ResolvePostStart(); err == nil {
+		t.Error("ResolvePostStart should still error for object form")
 	}
 }
 

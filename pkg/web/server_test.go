@@ -421,7 +421,7 @@ func TestHandleDeleteVM_Success(t *testing.T) {
 	fx.Runner.AddResponseKV("kubectl",
 		[]string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found", "--wait=false"}, "", nil)
 	fx.Runner.AddResponseKV("kubectl",
-		[]string{"delete", "vmsnapshot", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found"}, "", nil)
+		[]string{"delete", "vmsnapshot", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found", "--wait=false"}, "", nil)
 
 	resp := mustDelete(t, fx.Server.URL+"/api/vms/tailvm/myvm")
 	defer resp.Body.Close()

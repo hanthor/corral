@@ -51,8 +51,41 @@ Access the Proxmox-style Web UI at `http://localhost:8006` or via `corral web`.
 - **Live CPU & Memory Sparklines**: Real-time load monitoring per VM.
 - **Tag Filtering**: Filter instances by custom tags (`prod`, `dev`, `desktop`).
 - **Mobile Responsive**: Manage your VM fleet from your mobile browser.
+- **Theme & Branding**: Customize accent colours, header branding, and inject custom CSS — via CLI flags, config file, or the built-in Settings page.
 
 ![Mobile Dashboard](docs/screenshots/dashboard-mobile.png)
+
+#### Theme & Branding
+
+Corral's web UI accent colour, header branding, and custom CSS are fully
+customizable — no source-code changes needed.
+
+**CLI flags** (highest priority, override everything):
+```bash
+corral web --accent \"#3b82f6\" --brand-title \"My Lab\" --brand-emoji \"⚡\" --brand-subtitle \"Engineering\"
+```
+
+**Config file** (`~/.config/corral/config.yaml`, loaded on startup):
+```yaml
+web:
+  accent: \"#22c55e\"        # CSS hex colour
+  accent_2: \"#16a34a\"      # hover/active variant
+  brand_title: \"My Lab\"
+  brand_emoji: \"⚡\"
+  brand_subtitle: \"Engineering\"
+  custom_css: |
+    .btn.primary { border-radius: 20px; }
+    .card { background: var(--panel-2); }
+```
+
+**Settings page** (web UI → Settings in the sidebar):
+- Colour picker with preset swatches (Orange, Blue, Green, Purple, Red, Amber)
+- Brand title, emoji, and subtitle fields with live header preview
+- Custom CSS textarea that injects styles immediately as you type
+- Save button persists to `config.yaml`
+
+Precedence: CLI flags > config.yaml > built-in defaults (🤠 Corral, orange
+accent).
 
 ---
 

@@ -19,6 +19,10 @@ import (
 type DevContainerConfig struct {
 	// Image is an OCI ref to boot the CT from directly.
 	Image string `json:"image"`
+	// Features, if set, means this devcontainer.json installs composable
+	// feature scripts — not supported directly, but the error message tells
+	// the user how to build with the devcontainer CLI instead.
+	Features json.RawMessage `json:"features"`
 	// Build, if set instead of Image, means this devcontainer.json builds a
 	// Dockerfile rather than pulling a ready image — not supported yet.
 	Build *struct {
@@ -29,8 +33,16 @@ type DevContainerConfig struct {
 	// (several named commands, run in parallel) — so ResolvePostCreate can
 	// tell the three apart and give a precise error for the unsupported one.
 	PostCreateCommandRaw json.RawMessage `json:"postCreateCommand"`
-	RemoteUser           string          `json:"remoteUser"`
-	ForwardPorts         []flexPort      `json:"forwardPorts"`
+	// PostStartCommandRaw holds postStartCommand — same JSON shapes as
+	// postCreateCommand. Runs after postCreateCommand when the CT is ready.
+	// (postAttachCommand isn't supported: Corral CTs don't track attach
+	// events — only creation/start. The hook would trigger unpredictably.)
+	PostStartCommandRaw json.RawMessage `json:"postStartCommand"`
+	RemoteUser          string          `json:"remoteUser"`
+	ForwardPorts        []flexPort      `json:"forwardPorts"`
+	// Mounts are additional volume mounts per the devcontainer spec —
+	// comma-separated key=value strings: source=<path>,target=<path>,type=bind|volume.
+	Mounts []string `json:"mounts"`
 }
 
 // flexPort accepts devcontainer.json's forwardPorts entries in either form
@@ -148,11 +160,91 @@ func LoadDevContainerConfig(path string) (*DevContainerConfig, error) {
 	return &cfg, nil
 }
 
+// NamedCommand is a devcontainer lifecycle command with an optional key (the
+// map key from an object-form command like `{"install": "npm ci", "build": "go build"}`).
+// Commands from string/array form have an empty Name.
+type NamedCommand struct {
+	Name   string
+	Argv   []string
+	Script string
+}
+
+// WithUser wraps the command to run as user via `su`, same as
+// ResolvedPostCreate.WithUser.
+func (c *NamedCommand) WithUser(user string) *NamedCommand {
+	if user == "" || c == nil {
+		return c
+	}
+	script := c.Script
+	if len(c.Argv) > 0 {
+		quoted := make([]string, len(c.Argv))
+		for i, a := range c.Argv {
+			quoted[i] = shellQuote(a)
+		}
+		script = strings.Join(quoted, " ")
+	}
+	return &NamedCommand{Name: c.Name, Script: fmt.Sprintf("su -c %s %s", shellQuote(user), shellQuote(script))}
+}
+
 // ResolvedPostCreate is a devcontainer.json postCreateCommand ready to Exec:
 // exactly one of Argv/Script is set (see execArgv).
 type ResolvedPostCreate struct {
 	Argv   []string
 	Script string
+}
+
+// resolveCommands interprets a devcontainer lifecycle command (postCreateCommand,
+// postStartCommand) in any of its three JSON shapes: a bare string (shell
+// script), a []string (argv, no shell), or an object of several named commands
+// to run in parallel.
+func resolveCommands(raw json.RawMessage) ([]NamedCommand, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	// Try string form first (most common): "npm install"
+	var script string
+	if err := json.Unmarshal(raw, &script); err == nil {
+		return []NamedCommand{{Script: script}}, nil
+	}
+	// Try array form: ["npm", "ci"]
+	var argv []string
+	if err := json.Unmarshal(raw, &argv); err == nil {
+		return []NamedCommand{{Argv: argv}}, nil
+	}
+	// Try object form: {"install": "npm ci", "build": "go build ./..."}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf(
+			"postCreateCommand is not a string, array, or object — got %s", string(raw))
+	}
+	// Order of iteration over a map is random, but devcontainer.json's spec
+	// doesn't prescribe ordering; the commands are expected to be independent.
+	cmds := make([]NamedCommand, 0, len(obj))
+	for name, val := range obj {
+		if err := json.Unmarshal(val, &script); err == nil {
+			cmds = append(cmds, NamedCommand{Name: name, Script: script})
+			continue
+		}
+		if err := json.Unmarshal(val, &argv); err == nil {
+			cmds = append(cmds, NamedCommand{Name: name, Argv: argv})
+			continue
+		}
+		return nil, fmt.Errorf("command %q in object-form postCreateCommand is neither a string nor array — got %s", name, string(val))
+	}
+	return cmds, nil
+}
+
+// ResolvePostCreateCommands interprets postCreateCommand in any of its three
+// JSON shapes. Returns nil for no command; a single-element slice for string
+// or array form; multiple elements for the object form (run in parallel).
+func (c *DevContainerConfig) ResolvePostCreateCommands() ([]NamedCommand, error) {
+	return resolveCommands(c.PostCreateCommandRaw)
+}
+
+// ResolvePostStartCommands interprets postStartCommand in any of its three
+// JSON shapes. Same semantics as ResolvePostCreateCommands.
+func (c *DevContainerConfig) ResolvePostStartCommands() ([]NamedCommand, error) {
+	return resolveCommands(c.PostStartCommandRaw)
 }
 
 // ResolvePostCreate interprets postCreateCommand per its three allowed JSON
@@ -172,6 +264,26 @@ func (c *DevContainerConfig) ResolvePostCreate() (*ResolvedPostCreate, error) {
 	}
 	return nil, fmt.Errorf(
 		"postCreateCommand as an object (multiple parallel named commands) isn't supported yet — " +
+			"use a single string or a [\"argv\", \"form\"] array")
+}
+
+// ResolvePostStart interprets postStartCommand per its three allowed JSON
+// shapes. The object form (several named commands run in parallel) isn't
+// supported yet.
+func (c *DevContainerConfig) ResolvePostStart() (*ResolvedPostCreate, error) {
+	if len(c.PostStartCommandRaw) == 0 || string(c.PostStartCommandRaw) == "null" {
+		return nil, nil
+	}
+	var script string
+	if err := json.Unmarshal(c.PostStartCommandRaw, &script); err == nil {
+		return &ResolvedPostCreate{Script: script}, nil
+	}
+	var argv []string
+	if err := json.Unmarshal(c.PostStartCommandRaw, &argv); err == nil {
+		return &ResolvedPostCreate{Argv: argv}, nil
+	}
+	return nil, fmt.Errorf(
+		"postStartCommand as an object (multiple parallel named commands) isn't supported yet — " +
 			"use a single string or a [\"argv\", \"form\"] array")
 }
 
@@ -204,4 +316,74 @@ func (r *ResolvedPostCreate) WithUser(user string) *ResolvedPostCreate {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ── Mounts ────────────────────────────────────────────────────────
+
+// DevContainerMount is a resolved mount entry for a K8s pod.
+type DevContainerMount struct {
+	Name      string // volume name in the pod
+	MountPath string // container mount point
+	HostPath  string // hostPath for type=bind (empty for type=volume)
+	PVCName   string // PVC claim name for type=volume (empty for type=bind)
+}
+
+// parseMount parses a single devcontainer mount string:
+// "source=/host/path,target=/container/path,type=bind"
+func parseMount(s string) (*DevContainerMount, error) {
+	m := &DevContainerMount{}
+	source := ""
+	mountType := ""
+	for _, part := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "source":
+			source = strings.TrimSpace(v)
+		case "target":
+			m.MountPath = strings.TrimSpace(v)
+		case "type":
+			mountType = strings.TrimSpace(v)
+		}
+	}
+	if m.MountPath == "" {
+		return nil, fmt.Errorf("mount %q has no target", s)
+	}
+	if source == "" {
+		return nil, fmt.Errorf("mount %q has no source", s)
+	}
+	m.Name = "mount-" + sanitizeVolumeName(source)
+	switch mountType {
+	case "bind":
+		m.HostPath = source
+	case "volume", "":
+		m.PVCName = m.Name
+	default:
+		return nil, fmt.Errorf("unsupported mount type %q in %q", mountType, s)
+	}
+	return m, nil
+}
+
+func sanitizeVolumeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(strings.Trim(s, "/")))
+}
+
+// ResolveMounts parses the Mounts field into K8s-compatible volume configs.
+func (c *DevContainerConfig) ResolveMounts() ([]DevContainerMount, error) {
+	var mounts []DevContainerMount
+	for _, s := range c.Mounts {
+		m, err := parseMount(s)
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, *m)
+	}
+	return mounts, nil
 }

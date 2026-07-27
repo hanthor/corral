@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -71,17 +72,40 @@ still override anything --devcontainer would otherwise set.`,
 		image := ctImage
 		privileged := ctPrivileged
 		var devcfg *ct.DevContainerConfig
+		var err error
 		if ctDevcontainer != "" {
-			jsonPath, err := ct.FindDevContainerJSON(ctDevcontainer)
-			if err != nil {
-				return err
+			jsonPath, e := ct.FindDevContainerJSON(ctDevcontainer)
+			if e != nil {
+				return e
 			}
 			devcfg, err = ct.LoadDevContainerConfig(jsonPath)
 			if err != nil {
 				return err
 			}
 			if devcfg.Build != nil && image == "" {
-				return fmt.Errorf("%s builds a Dockerfile (build.dockerfile) rather than pulling an image — not supported yet; build and push an image yourself, then pass --image", jsonPath)
+				df := devcfg.Build.Dockerfile
+				if df == "" {
+					df = "Dockerfile"
+				}
+				ctx := ctDevcontainer
+				if st, err := os.Stat(ctx); err == nil && st.IsDir() {
+					// ctx is already the project dir
+				} else {
+					ctx = filepath.Dir(ctx)
+				}
+				return fmt.Errorf(
+					"%s uses build.dockerfile — build and push the image first, then pass --image:\n"+
+						"  cd %s && docker build -t ghcr.io/YOU/corral-ct:%s -f %s . && docker push ghcr.io/YOU/corral-ct:%s\n"+
+						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+					jsonPath, ctx, name, df, name, name, name, ctDevcontainer)
+			}
+			if len(devcfg.Features) > 0 && string(devcfg.Features) != "null" && string(devcfg.Features) != "{}" {
+				return fmt.Errorf(
+					"%s has features — build with the devcontainer CLI first, then pass --image:\n"+
+						"  devcontainer build --workspace-folder %s --image-name ghcr.io/YOU/corral-ct:%s\n"+
+						"  docker push ghcr.io/YOU/corral-ct:%s\n"+
+						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+					jsonPath, ctDevcontainer, name, name, name, name, ctDevcontainer)
 			}
 			if image == "" {
 				image = devcfg.Image
@@ -100,11 +124,19 @@ still override anything --devcontainer would otherwise set.`,
 			return fmt.Errorf("--image is required (or --devcontainer pointing at a devcontainer.json with one)")
 		}
 
+		var mounts []ct.DevContainerMount
+		if devcfg != nil {
+			mounts, err = devcfg.ResolveMounts()
+			if err != nil {
+				return err
+			}
+		}
+
 		if err := ct.Create(ct.CreateOpts{
 			Name: name, Namespace: ns, Image: image,
 			CPU: ctCPU, Mem: ctMem, Disk: ctDisk,
 			StorageClass: ctStorageClass, Privileged: privileged,
-			Init: ctInit,
+			Init: ctInit, Mounts: mounts,
 		}); err != nil {
 			return err
 		}
@@ -139,20 +171,39 @@ func exposeCTPorts(name, ns string, ports []int) {
 }
 
 func applyDevContainerPostCreate(name, ns string, cfg *ct.DevContainerConfig, extraPorts []int) error {
-	post, err := cfg.ResolvePostCreate()
+	// Run all postCreate commands (single string/array or multiple named).
+	postCmds, err := cfg.ResolvePostCreateCommands()
 	if err != nil {
 		return err
 	}
-	post = post.WithUser(cfg.RemoteUser)
 
-	if post != nil {
-		fmt.Println("Waiting for the CT to be ready before running postCreateCommand…")
+	// Run all postStart commands (single string/array or multiple named).
+	postStartCmds, err := cfg.ResolvePostStartCommands()
+	if err != nil {
+		return err
+	}
+
+	allCmds := append(append([]ct.NamedCommand{}, postCmds...), postStartCmds...)
+	for i := range allCmds {
+		allCmds[i] = *allCmds[i].WithUser(cfg.RemoteUser)
+	}
+
+	if len(allCmds) > 0 {
+		fmt.Println("Waiting for the CT to be ready before running devcontainer commands…")
 		if err := ct.WaitReady(name, ns, ctReadyTimeout); err != nil {
-			return fmt.Errorf("postCreateCommand: %w", err)
+			return fmt.Errorf("devcontainer lifecycle: %w", err)
 		}
-		fmt.Println("Running postCreateCommand…")
-		if err := ct.Exec(name, ns, post.Argv, post.Script); err != nil {
-			return fmt.Errorf("postCreateCommand failed: %w", err)
+
+		if len(allCmds) == 1 {
+			fmt.Println("Running lifecycle command…")
+			if err := ct.Exec(name, ns, allCmds[0].Argv, allCmds[0].Script); err != nil {
+				return fmt.Errorf("lifecycle command failed: %w", err)
+			}
+		} else {
+			fmt.Printf("Running %d lifecycle commands in parallel…\n", len(allCmds))
+			if err := ct.ExecParallel(name, ns, allCmds); err != nil {
+				return fmt.Errorf("lifecycle commands: %w", err)
+			}
 		}
 	}
 

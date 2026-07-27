@@ -22,12 +22,13 @@ type CreateOpts struct {
 	Name         string
 	Namespace    string
 	Image        string
-	CPU          int    // vCPU cores → pod CPU limit/request
-	Mem          string // e.g. "512Mi" → pod memory limit/request
-	Disk         string // PVC size, e.g. "5Gi"
-	StorageClass string // "" = cluster default
-	Privileged   bool   // PVE's "Privileged" checkbox
-	Init         bool   // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
+	CPU          int                 // vCPU cores → pod CPU limit/request
+	Mem          string              // e.g. "512Mi" → pod memory limit/request
+	Disk         string              // PVC size, e.g. "5Gi"
+	StorageClass string              // "" = cluster default
+	Privileged   bool                // PVE's "Privileged" checkbox
+	Init         bool                // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
+	Mounts       []DevContainerMount // additional volume mounts from devcontainer.json
 }
 
 // CT describes a running or stopped Container as reported by ListCTs.
@@ -50,11 +51,12 @@ type CT struct {
 // without the caller re-specifying everything. Same pattern as bootc's
 // corral.bootc/image annotation.
 type ctSpec struct {
-	Image      string `json:"image"`
-	CPU        int    `json:"cpu"`
-	Mem        string `json:"mem"`
-	Privileged bool   `json:"privileged"`
-	Init       bool   `json:"init,omitempty"`
+	Image      string              `json:"image"`
+	CPU        int                 `json:"cpu"`
+	Mem        string              `json:"mem"`
+	Privileged bool                `json:"privileged"`
+	Init       bool                `json:"init,omitempty"`
+	Mounts     []DevContainerMount `json:"mounts,omitempty"`
 }
 
 const (
@@ -209,6 +211,25 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 		command = nil
 	}
 
+	// Add devcontainer mounts (bind = hostPath, volume = PVC).
+	volumeMounts := []map[string]any{
+		{"name": "data", "mountPath": mountPath},
+	}
+	volumes := []map[string]any{
+		{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": pvcName(name)}},
+	}
+	for _, m := range spec.Mounts {
+		vm := map[string]any{"name": m.Name, "mountPath": m.MountPath}
+		volumeMounts = append(volumeMounts, vm)
+		vol := map[string]any{"name": m.Name}
+		if m.HostPath != "" {
+			vol["hostPath"] = map[string]any{"path": m.HostPath}
+		} else {
+			vol["persistentVolumeClaim"] = map[string]any{"claimName": m.PVCName}
+		}
+		volumes = append(volumes, vol)
+	}
+
 	ctr := map[string]any{
 		"name":  "ct",
 		"image": spec.Image,
@@ -219,9 +240,7 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 			"requests": map[string]any{"cpu": strconv.Itoa(cpu), "memory": mem},
 		},
 		"securityContext": map[string]any{"privileged": spec.Privileged},
-		"volumeMounts": []map[string]any{
-			{"name": "data", "mountPath": mountPath},
-		},
+		"volumeMounts":    volumeMounts,
 	}
 	if command != nil {
 		ctr["command"] = command // nil = the image's own entrypoint (Init)
@@ -238,9 +257,7 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 		"spec": map[string]any{
 			"restartPolicy": "Always",
 			"containers":    []map[string]any{ctr},
-			"volumes": []map[string]any{
-				{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": pvcName(name)}},
-			},
+			"volumes":       volumes,
 		},
 	}
 }
@@ -313,7 +330,28 @@ func Create(opts CreateOpts) error {
 	if err := apply(pvc); err != nil {
 		return fmt.Errorf("creating data PVC: %w", err)
 	}
-	spec := ctSpec{Image: opts.Image, CPU: opts.CPU, Mem: opts.Mem, Privileged: opts.Privileged, Init: opts.Init}
+	// Create PVCs for devcontainer volume mounts.
+	for _, m := range opts.Mounts {
+		if m.PVCName == "" {
+			continue // bind mount, no PVC needed
+		}
+		mountPVC := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "PersistentVolumeClaim",
+			"metadata":   map[string]any{"name": m.PVCName, "namespace": opts.Namespace},
+			"spec": map[string]any{
+				"accessModes": []string{"ReadWriteOnce"},
+				"resources":   map[string]any{"requests": map[string]any{"storage": "1Gi"}},
+			},
+		}
+		if opts.StorageClass != "" {
+			mountPVC["spec"].(map[string]any)["storageClassName"] = opts.StorageClass
+		}
+		if err := apply(mountPVC); err != nil {
+			return fmt.Errorf("creating mount PVC %s: %w", m.PVCName, err)
+		}
+	}
+	spec := ctSpec{Image: opts.Image, CPU: opts.CPU, Mem: opts.Mem, Privileged: opts.Privileged, Init: opts.Init, Mounts: opts.Mounts}
 	if err := apply(generatePod(opts.Name, opts.Namespace, spec)); err != nil {
 		return fmt.Errorf("creating pod: %w", err)
 	}
@@ -401,6 +439,49 @@ func Exec(name, namespace string, argv []string, script string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ExecParallel runs multiple one-shot commands inside a running CT
+// concurrently, streaming each to stdout/stderr with a header prefix.
+// Returns the first error encountered, but all commands are started
+// and run to completion before returning.
+func ExecParallel(name, namespace string, cmds []NamedCommand) error {
+	if len(cmds) == 0 {
+		return nil
+	}
+	spec, err := specFromPVC(name, namespace)
+	if err != nil {
+		return err
+	}
+
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(cmds))
+
+	for _, c := range cmds {
+		go func(cmd NamedCommand) {
+			args := append([]string{"exec", name, "-n", namespace, "--"},
+				execArgv(spec.Privileged, cmd.Argv, cmd.Script)...)
+			c := exec.Command("kubectl", args...)
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			if cmd.Name != "" {
+				fmt.Printf("\n── %s ──\n", cmd.Name)
+			}
+			results <- result{name: cmd.Name, err: c.Run()}
+		}(c)
+	}
+
+	var firstErr error
+	for range len(cmds) {
+		r := <-results
+		if r.err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("command %q failed: %w", r.name, r.err)
+		}
+	}
+	return firstErr
 }
 
 // WaitReady polls ListCTs until name is Ready or timeout elapses. A
