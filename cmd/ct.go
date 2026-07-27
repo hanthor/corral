@@ -156,6 +156,26 @@ func applyDevContainerPostCreate(name, ns string, cfg *ct.DevContainerConfig, ex
 		}
 	}
 
+	// postStartCommand runs after postCreateCommand, same lifecycle semantics.
+	postStart, err := cfg.ResolvePostStart()
+	if err != nil {
+		return err
+	}
+	postStart = postStart.WithUser(cfg.RemoteUser)
+	if postStart != nil {
+		if post == nil {
+			// Only wait if we haven't already waited for postCreateCommand.
+			fmt.Println("Waiting for the CT to be ready before running postStartCommand…")
+			if err := ct.WaitReady(name, ns, ctReadyTimeout); err != nil {
+				return fmt.Errorf("postStartCommand: %w", err)
+			}
+		}
+		fmt.Println("Running postStartCommand…")
+		if err := ct.Exec(name, ns, postStart.Argv, postStart.Script); err != nil {
+			return fmt.Errorf("postStartCommand failed: %w", err)
+		}
+	}
+
 	exposeCTPorts(name, ns, append(cfg.Ports(), extraPorts...))
 	return nil
 }

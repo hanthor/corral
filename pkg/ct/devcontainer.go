@@ -29,7 +29,12 @@ type DevContainerConfig struct {
 	// (several named commands, run in parallel) — so ResolvePostCreate can
 	// tell the three apart and give a precise error for the unsupported one.
 	PostCreateCommandRaw json.RawMessage `json:"postCreateCommand"`
-	RemoteUser           string          `json:"remoteUser"`
+	// PostStartCommandRaw holds postStartCommand — same JSON shapes as
+	// postCreateCommand. Runs after postCreateCommand when the CT is ready.
+	// (postAttachCommand isn't supported: Corral CTs don't track attach
+	// events — only creation/start. The hook would trigger unpredictably.)
+	PostStartCommandRaw json.RawMessage `json:"postStartCommand"`
+	RemoteUser          string          `json:"remoteUser"`
 	ForwardPorts         []flexPort      `json:"forwardPorts"`
 }
 
@@ -172,6 +177,26 @@ func (c *DevContainerConfig) ResolvePostCreate() (*ResolvedPostCreate, error) {
 	}
 	return nil, fmt.Errorf(
 		"postCreateCommand as an object (multiple parallel named commands) isn't supported yet — " +
+			"use a single string or a [\"argv\", \"form\"] array")
+}
+
+// ResolvePostStart interprets postStartCommand per its three allowed JSON
+// shapes. The object form (several named commands run in parallel) isn't
+// supported yet.
+func (c *DevContainerConfig) ResolvePostStart() (*ResolvedPostCreate, error) {
+	if len(c.PostStartCommandRaw) == 0 || string(c.PostStartCommandRaw) == "null" {
+		return nil, nil
+	}
+	var script string
+	if err := json.Unmarshal(c.PostStartCommandRaw, &script); err == nil {
+		return &ResolvedPostCreate{Script: script}, nil
+	}
+	var argv []string
+	if err := json.Unmarshal(c.PostStartCommandRaw, &argv); err == nil {
+		return &ResolvedPostCreate{Argv: argv}, nil
+	}
+	return nil, fmt.Errorf(
+		"postStartCommand as an object (multiple parallel named commands) isn't supported yet — " +
 			"use a single string or a [\"argv\", \"form\"] array")
 }
 

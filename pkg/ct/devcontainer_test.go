@@ -186,6 +186,41 @@ func TestResolvePostCreate_ObjectFormUnsupported(t *testing.T) {
 	}
 }
 
+func TestResolvePostStart_Script(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postStartCommand": "echo ready"}`))
+	if err != nil {
+		t.Fatalf("LoadDevContainerConfig: %v", err)
+	}
+	post, err := cfg.ResolvePostStart()
+	if err != nil {
+		t.Fatalf("ResolvePostStart: %v", err)
+	}
+	if post.Script != "echo ready" {
+		t.Errorf("Script = %q, want 'echo ready'", post.Script)
+	}
+}
+
+func TestResolvePostStart_Empty(t *testing.T) {
+	cfg := &DevContainerConfig{}
+	post, err := cfg.ResolvePostStart()
+	if err != nil {
+		t.Fatalf("ResolvePostStart: %v", err)
+	}
+	if post != nil {
+		t.Errorf("expected nil for no postStartCommand, got %+v", post)
+	}
+}
+
+func TestResolvePostStart_ObjectFormUnsupported(t *testing.T) {
+	cfg, err := LoadDevContainerConfig(writeTempConfig(t, `{"postStartCommand": {"one": "echo a"}}`))
+	if err != nil {
+		t.Fatalf("LoadDevContainerConfig: %v", err)
+	}
+	if _, err := cfg.ResolvePostStart(); err == nil {
+		t.Error("object-form postStartCommand should error")
+	}
+}
+
 func TestWithUser_NoopWhenEmpty(t *testing.T) {
 	post := &ResolvedPostCreate{Script: "npm install"}
 	if got := post.WithUser(""); got != post {
