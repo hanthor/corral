@@ -523,3 +523,8 @@ Full design document: [SPEC.md](SPEC.md).
 
 A corral is one fence that holds the whole herd. Your VMs are the cattle;
 your tailnet is the fence. *(Formerly known as `tailvm`.)*
+
+
+## Community
+
+[Discord](https://discord.gg/TeP2kxKQq)
