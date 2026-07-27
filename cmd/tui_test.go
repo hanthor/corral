@@ -82,7 +82,7 @@ func TestTUI_RenderView(t *testing.T) {
 	m.height = 40
 
 	rendered := m.View()
-	if !strings.Contains(rendered, "Corral") {
-		t.Errorf("TUI View() output missing header title: %s", rendered)
+	if !strings.Contains(rendered, "web-prod") {
+		t.Errorf("TUI View() output missing expected VM item: %s", rendered)
 	}
 }
