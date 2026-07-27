@@ -401,7 +401,7 @@ async function renderMultiview(main) {
     <div class="page-head"><h1>${icon('cube')} Multiview</h1>
       <span class="muted">${running.length} running VM${running.length === 1 ? '' : 's'}${running.length > 6 ? ' — showing first 6' : ''}</span>
     </div>
-    ${shown.length ? `<div id="mv-grid" class="mv-grid"></div>`
+    ${shown.length ? `<div id="mv-grid" class="mv-grid" data-count="${shown.length}"></div>`
       : `<p class="console-msg">No running VMs. Start some and they appear here, live.</p>`}`;
   if (!shown.length) return;
 

@@ -537,6 +537,51 @@ tr.ev-warn td { color: var(--yellow); }
   font-size: .85em;
 }
 
+/* ── Multiview Grid ──────────────────────────────────────── */
+.mv-grid {
+  display: grid;
+  gap: 12px;
+  height: calc(100vh - 120px);
+  width: 100%;
+}
+.mv-grid[data-count="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.mv-grid[data-count="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.mv-grid[data-count="3"],
+.mv-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.mv-grid[data-count="5"],
+.mv-grid[data-count="6"] { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+.mv-tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.mv-title {
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: .9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mv-title:hover { color: var(--accent); }
+.mv-screen {
+  flex: 1;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* ── Mobile ─────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .icon-btn { display: block; }
