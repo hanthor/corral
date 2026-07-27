@@ -26,6 +26,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/proxmox"
 	"github.com/tuna-os/corral/pkg/registry"
