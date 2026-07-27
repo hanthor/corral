@@ -227,6 +227,9 @@ func handleListVMs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	vms = append(vms, local...)
+	if incusVMs, err := incus.List(); err == nil && len(incusVMs) > 0 {
+		vms = append(vms, incusVMs...)
+	}
 	if vms == nil {
 		vms = []types.VM{}
 	}
