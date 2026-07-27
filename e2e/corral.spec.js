@@ -127,8 +127,10 @@ test.afterEach(async () => {
   for (const dv of createdDVs) {
     if (!dv.startsWith('e2e-')) continue;
     await api(`/api/datavolumes/${NS}/${dv}`, { method: 'DELETE' }).catch(() => {});
-    kubectl(`kubectl delete dv ${dv} -n ${NS} --ignore-not-found --wait=false`);
-    await waitFor(() => !dvExists(dv), 60_000, 3000, `dv ${dv} gone`);
+    kubectl(`kubectl delete dv ${dv} -n ${NS} --force --grace-period=0 --ignore-not-found --wait=false`);
+    await waitFor(() => !dvExists(dv), 15_000, 2000, `dv ${dv} gone`).catch(() => {
+      kubectl(`kubectl delete dv ${dv} -n ${NS} --force --grace-period=0 --ignore-not-found`);
+    });
   }
   for (const vm of createdVMs) {
     if (vm.startsWith('e2e-')) expect(vmExists(vm), `cleanup: vm ${vm} still exists`).toBe(false);
