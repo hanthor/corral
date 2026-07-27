@@ -15,7 +15,6 @@ import (
 	"github.com/tuna-os/corral/pkg/doctor"
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
-	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -196,11 +195,9 @@ func newTUIModel() tuiModel {
 	for _, vm := range qVMs {
 		items = append(items, vmToItem(vm))
 	}
-	if plugin.IsInstalled("incus") {
-		iVMs, _ := incus.List()
-		for _, vm := range iVMs {
-			items = append(items, vmToItem(vm))
-		}
+	iVMs, _ := incus.List()
+	for _, vm := range iVMs {
+		items = append(items, vmToItem(vm))
 	}
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
