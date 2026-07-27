@@ -860,7 +860,7 @@ function bindCTTable(root) {
 // Container (CT) detail view (#50) — simpler than a VM's: no VNC/hardware/
 // snapshots, just Summary + Terminal (exec, not a serial console — see
 // ttyBridge's VM-vs-CT dispatch) and start/stop/delete.
-const CT_TABS = [['summary', 'Summary'], ['terminal', 'Terminal']];
+const CT_TABS = [['summary', 'Summary'], ['hardware', 'Hardware'], ['terminal', 'Terminal']];
 let ctTab = 'summary';
 
 function renderCT(main, c) {
@@ -903,6 +903,24 @@ function renderCT(main, c) {
     </dl>`;
   } else if (ctTab === 'terminal') {
     connectTTY({ namespace: c.namespace, name: c.name, running }, body);
+  } else if (ctTab === 'hardware') {
+    body.innerHTML = `<div class="hw-edit">
+      <label>vCPUs <input id="ct-hw-cpu" type="number" value="${c.cpu || 1}" min="1"></label>
+      <label>Memory <input id="ct-hw-mem" value="${esc(c.mem || '512Mi')}"></label>
+      <button class="btn primary" id="ct-hw-apply">Apply</button>
+    </div>`;
+    $('#ct-hw-apply').onclick = async () => {
+      const cpu = parseInt($('#ct-hw-cpu').value, 10) || 0;
+      const mem = $('#ct-hw-mem').value.trim();
+      try {
+        await api(`/api/cts/${c.namespace}/${c.name}/scale`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cpu, mem }),
+        });
+        toast('Scaled — stop/start to apply if the pod rejects in-place resize');
+        refresh(true);
+      } catch (e) { toast(e.message); }
+    };
   }
 }
 

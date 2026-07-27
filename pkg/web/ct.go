@@ -106,3 +106,21 @@ func handleDeleteCT(w http.ResponseWriter, r *http.Request) {
 	done(nil)
 	jsonResp(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+
+// PUT /api/cts/{ns}/{name}/scale
+func handleScaleCT(w http.ResponseWriter, r *http.Request) {
+	ns, name := r.PathValue("ns"), r.PathValue("name")
+	var req struct {
+		CPU int    `json:"cpu"`
+		Mem string `json:"mem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errResp(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := ct.Scale(name, ns, req.CPU, req.Mem); err != nil {
+		errResp(w, http.StatusInternalServerError, err)
+		return
+	}
+	jsonResp(w, http.StatusOK, map[string]string{"status": "scaled"})
+}

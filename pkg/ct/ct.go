@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -623,4 +624,59 @@ func ListCTs() ([]CT, error) {
 		})
 	}
 	return out, nil
+}
+
+// Scale updates a CT's CPU and memory. If the CT is running, patches the pod
+// in-place; always updates the spec annotation so Stop/Start preserves the
+// new values. Zero values leave the field unchanged.
+func Scale(name, namespace string, cpu int, mem string) error {
+	spec, err := specFromPVC(name, namespace)
+	if err != nil {
+		return err
+	}
+
+	if cpu > 0 {
+		spec.CPU = cpu
+	}
+	if mem != "" {
+		spec.Mem = mem
+	}
+
+	// Persist the updated spec on the PVC annotation.
+	raw, _ := json.Marshal(spec)
+	patch := fmt.Sprintf(
+		`[{"op":"replace","path":"/metadata/annotations/corral.ct~1spec","value":%s}]`,
+		string(raw))
+	if _, err := run("kubectl", "patch", "pvc", pvcName(name), "-n", namespace,
+		"--type=json", "-p", patch); err != nil {
+		return fmt.Errorf("updating CT spec annotation: %w", err)
+	}
+
+	// If the pod is running, patch its resource limits/requests in-place.
+	podExists := false
+	if out, err := run("kubectl", "get", "pod", name, "-n", namespace, "-o", "name", "--ignore-not-found"); err == nil && len(out) > 0 {
+		podExists = true
+	}
+	if podExists {
+		parts := []string{}
+		if cpu > 0 {
+			parts = append(parts,
+				fmt.Sprintf(`{"op":"replace","path":"/spec/containers/0/resources/limits/cpu","value":"%d"}`, cpu),
+				fmt.Sprintf(`{"op":"replace","path":"/spec/containers/0/resources/requests/cpu","value":"%d"}`, cpu))
+		}
+		if mem != "" {
+			parts = append(parts,
+				fmt.Sprintf(`{"op":"replace","path":"/spec/containers/0/resources/limits/memory","value":"%s"}`, mem),
+				fmt.Sprintf(`{"op":"replace","path":"/spec/containers/0/resources/requests/memory","value":"%s"}`, mem))
+		}
+		if len(parts) > 0 {
+			patch := fmt.Sprintf("[%s]", strings.Join(parts, ","))
+			if _, err := run("kubectl", "patch", "pod", name, "-n", namespace,
+				"--type=json", "-p", patch); err != nil {
+				return fmt.Errorf("patching pod resources: %w", err)
+			}
+		}
+	}
+
+	return nil
 }

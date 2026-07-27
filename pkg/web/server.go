@@ -100,6 +100,7 @@ func newMux() (http.Handler, error) {
 	mux.HandleFunc("POST /api/cts", handleCreateCT)
 	mux.HandleFunc("POST /api/cts/{ns}/{name}/{action}", handleCTAction)
 	mux.HandleFunc("DELETE /api/cts/{ns}/{name}", handleDeleteCT)
+	mux.HandleFunc("PUT /api/cts/{ns}/{name}/scale", handleScaleCT)
 	mux.HandleFunc("GET /api/nodes", handleNodes)
 	mux.HandleFunc("GET /api/capabilities", handleCapabilities)
 	mux.HandleFunc("GET /api/images", handleImages)
