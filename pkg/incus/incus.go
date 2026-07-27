@@ -97,6 +97,13 @@ func Stop(name string) error {
 		if strings.Contains(string(out), "already stopped") || strings.Contains(string(out), "not running") {
 			return nil
 		}
+		// ACPI guest agent shutdown might time out on uninitialized OS VMs; fallback to forced stop.
+		forceCmd := exec.Command("incus", "stop", name, "--force")
+		if forceOut, forceErr := forceCmd.CombinedOutput(); forceErr == nil {
+			return nil
+		} else {
+			_ = forceOut
+		}
 		return fmt.Errorf("incus stop %s: %s (%w)", name, string(out), err)
 	}
 	return nil
