@@ -58,17 +58,23 @@ Access the Proxmox-style Web UI at `http://localhost:8006` or via `corral web`.
 
 ### Terminal UI (TUI)
 
-Launch the interactive Bubble Tea TUI by running `corral` with no arguments.
+Launch the interactive Bubble Tea TUI by running `corral` with no arguments (or explore in demo mode with `corral --demo`).
 
 ```
-┌─ Corral Datacenter ──────────────────────────────────────────────┐
-│  NAME           BACKEND   STATUS     CPU   MEM   NODE           │
-│● web-prod       kubevirt  Running    2     4Gi   corral-1       │
-│● db-prod        kubevirt  Running    4     8Gi   corral-2       │
-│● laptop-dev     qemu      Running    2     4G    localhost      │
-│● test-ct        incus     Running    2     2Gi   localhost      │
-└──────────────────────────────────────────────────────────────────┘
+┌─ Corral Datacenter ────────────────────────────────────────────────────────┐
+│  NAME            BACKEND    STATUS      PORTS  SPECS          NODE         │
+│● web-prod        kubevirt   Running     ●      2 CPU / 4Gi    corral-1     │
+│● db-prod         kubevirt   Running     ●      4 CPU / 8Gi    corral-2     │
+│● laptop-dev      qemu       Running     ○      2 CPU / 4G     localhost    │
+│● test-ct         incus      Running     ○      2 CPU / 2Gi    localhost    │
+└────────────────────────────────────────────────────────────────────────────┘
+  [enter] actions  [d] doctor  [q] quit
 ```
+
+#### TUI Keyboard Shortcuts & Features:
+- **`[Enter]` Actions Menu**: Opens contextual action menu (Start, Stop, Restart, Pause, Migrate, SSH, VNC Viewer, Delete).
+- **`[d]` Doctor View**: Runs full cluster & host diagnostic checks inline within the terminal.
+- **Incus & Pet-Pod Integration**: Displays all compute instances (KubeVirt VMs, QEMU local VMs, Pet-Pod CTs, and Incus instances) in a unified Bubble Tea list.
 
 ---
 

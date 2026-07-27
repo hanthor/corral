@@ -13,7 +13,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -193,6 +195,12 @@ func newTUIModel() tuiModel {
 	qVMs, _ := qemu.List()
 	for _, vm := range qVMs {
 		items = append(items, vmToItem(vm))
+	}
+	if plugin.IsInstalled("incus") {
+		iVMs, _ := incus.List()
+		for _, vm := range iVMs {
+			items = append(items, vmToItem(vm))
+		}
 	}
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
@@ -449,19 +457,26 @@ func (m *tuiModel) performAction(action string) {
 
 	switch action {
 	case "start":
-		if backend == "kubevirt" {
+		if backend == "incus" {
+			incus.Start(name)
+		} else if backend == "kubevirt" {
 			kubevirt.NewClient(ns).StartVM(name)
 		} else {
 			qemu.Start(name)
 		}
 	case "stop":
-		if backend == "kubevirt" {
+		if backend == "incus" {
+			incus.Stop(name)
+		} else if backend == "kubevirt" {
 			kubevirt.NewClient(ns).StopVM(name)
 		} else {
 			qemu.Stop(name)
 		}
 	case "restart":
-		if backend == "kubevirt" {
+		if backend == "incus" {
+			incus.Stop(name)
+			incus.Start(name)
+		} else if backend == "kubevirt" {
 			kubevirt.NewClient(ns).RestartVM(name)
 		} else {
 			qemu.Stop(name)
@@ -493,7 +508,9 @@ func (m *tuiModel) performAction(action string) {
 			}
 		}
 	case "delete":
-		if backend == "kubevirt" {
+		if backend == "incus" {
+			incus.Delete(name)
+		} else if backend == "kubevirt" {
 			kubevirt.NewClient(ns).DeleteVM(name)
 		} else {
 			qemu.Delete(name)

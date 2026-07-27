@@ -1,0 +1,8 @@
+# import config
+packagefile os=/home/james/.cache/go-build/c1/c1d8cf565d34fd5a75f692763f374d797b4f27c060117c3a04ff9e980360a0b9-d
+packagefile reflect=/home/james/.cache/go-build/0d/0dac0475a7120f7d70e715f707b28450046a3a68bf7e52816a65147e36f476d0-d
+packagefile testing=/home/james/.cache/go-build/64/64f7c00d91c1ae98a2ef3e17800a6d8aea48505f6a0996b86f2a102c83d9ed09-d
+packagefile testing/internal/testdeps=/home/james/.cache/go-build/7a/7a91427eb04c25d1c79fa08674b75b645d4f24b8e39b5c349efb908fd16a2d85-d
+packagefile runtime=/home/james/.cache/go-build/82/82d328e3700e962a3d210c9ad2e4e0825d392ef652410dbc7edbb10abf6434af-d
+packagefile runtime/race=/home/james/.cache/go-build/6b/6be32bc8479fbb93f7cf45899daa566a5c9131ba5fed2a017be35049789c62c5-d
+packagefile github.com/tuna-os/corral/cmd=/home/james/dev/tuna-os/corral/scratch/go-build423438796/b128/_pkg_.a
