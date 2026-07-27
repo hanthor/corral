@@ -28,6 +28,7 @@ type CreateOpts struct {
 	StorageClass string // "" = cluster default
 	Privileged   bool   // PVE's "Privileged" checkbox
 	Init         bool   // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
+	Mounts       []DevContainerMount // additional volume mounts from devcontainer.json
 }
 
 // CT describes a running or stopped Container as reported by ListCTs.
@@ -53,8 +54,9 @@ type ctSpec struct {
 	Image      string `json:"image"`
 	CPU        int    `json:"cpu"`
 	Mem        string `json:"mem"`
-	Privileged bool   `json:"privileged"`
-	Init       bool   `json:"init,omitempty"`
+	Privileged bool                 `json:"privileged"`
+	Init       bool                 `json:"init,omitempty"`
+	Mounts     []DevContainerMount  `json:"mounts,omitempty"`
 }
 
 const (
@@ -209,6 +211,25 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 		command = nil
 	}
 
+	// Add devcontainer mounts (bind = hostPath, volume = PVC).
+	volumeMounts := []map[string]any{
+		{"name": "data", "mountPath": mountPath},
+	}
+	volumes := []map[string]any{
+		{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": pvcName(name)}},
+	}
+	for _, m := range spec.Mounts {
+		vm := map[string]any{"name": m.Name, "mountPath": m.MountPath}
+		volumeMounts = append(volumeMounts, vm)
+		vol := map[string]any{"name": m.Name}
+		if m.HostPath != "" {
+			vol["hostPath"] = map[string]any{"path": m.HostPath}
+		} else {
+			vol["persistentVolumeClaim"] = map[string]any{"claimName": m.PVCName}
+		}
+		volumes = append(volumes, vol)
+	}
+
 	ctr := map[string]any{
 		"name":  "ct",
 		"image": spec.Image,
@@ -219,9 +240,7 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 			"requests": map[string]any{"cpu": strconv.Itoa(cpu), "memory": mem},
 		},
 		"securityContext": map[string]any{"privileged": spec.Privileged},
-		"volumeMounts": []map[string]any{
-			{"name": "data", "mountPath": mountPath},
-		},
+		"volumeMounts":   volumeMounts,
 	}
 	if command != nil {
 		ctr["command"] = command // nil = the image's own entrypoint (Init)
@@ -238,9 +257,7 @@ func generatePod(name, namespace string, spec ctSpec) map[string]any {
 		"spec": map[string]any{
 			"restartPolicy": "Always",
 			"containers":    []map[string]any{ctr},
-			"volumes": []map[string]any{
-				{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": pvcName(name)}},
-			},
+			"volumes":       volumes,
 		},
 	}
 }
@@ -313,7 +330,28 @@ func Create(opts CreateOpts) error {
 	if err := apply(pvc); err != nil {
 		return fmt.Errorf("creating data PVC: %w", err)
 	}
-	spec := ctSpec{Image: opts.Image, CPU: opts.CPU, Mem: opts.Mem, Privileged: opts.Privileged, Init: opts.Init}
+	// Create PVCs for devcontainer volume mounts.
+	for _, m := range opts.Mounts {
+		if m.PVCName == "" {
+			continue // bind mount, no PVC needed
+		}
+		mountPVC := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "PersistentVolumeClaim",
+			"metadata":   map[string]any{"name": m.PVCName, "namespace": opts.Namespace},
+			"spec": map[string]any{
+				"accessModes": []string{"ReadWriteOnce"},
+				"resources":   map[string]any{"requests": map[string]any{"storage": "1Gi"}},
+			},
+		}
+		if opts.StorageClass != "" {
+			mountPVC["spec"].(map[string]any)["storageClassName"] = opts.StorageClass
+		}
+		if err := apply(mountPVC); err != nil {
+			return fmt.Errorf("creating mount PVC %s: %w", m.PVCName, err)
+		}
+	}
+	spec := ctSpec{Image: opts.Image, CPU: opts.CPU, Mem: opts.Mem, Privileged: opts.Privileged, Init: opts.Init, Mounts: opts.Mounts}
 	if err := apply(generatePod(opts.Name, opts.Namespace, spec)); err != nil {
 		return fmt.Errorf("creating pod: %w", err)
 	}

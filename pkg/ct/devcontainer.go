@@ -36,6 +36,9 @@ type DevContainerConfig struct {
 	PostStartCommandRaw json.RawMessage `json:"postStartCommand"`
 	RemoteUser          string          `json:"remoteUser"`
 	ForwardPorts        []flexPort      `json:"forwardPorts"`
+	// Mounts are additional volume mounts per the devcontainer spec —
+	// comma-separated key=value strings: source=<path>,target=<path>,type=bind|volume.
+	Mounts []string `json:"mounts"`
 }
 
 // flexPort accepts devcontainer.json's forwardPorts entries in either form
@@ -309,4 +312,74 @@ func (r *ResolvedPostCreate) WithUser(user string) *ResolvedPostCreate {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ── Mounts ────────────────────────────────────────────────────────
+
+// DevContainerMount is a resolved mount entry for a K8s pod.
+type DevContainerMount struct {
+	Name      string // volume name in the pod
+	MountPath string // container mount point
+	HostPath  string // hostPath for type=bind (empty for type=volume)
+	PVCName   string // PVC claim name for type=volume (empty for type=bind)
+}
+
+// parseMount parses a single devcontainer mount string:
+// "source=/host/path,target=/container/path,type=bind"
+func parseMount(s string) (*DevContainerMount, error) {
+	m := &DevContainerMount{}
+	source := ""
+	mountType := ""
+	for _, part := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "source":
+			source = strings.TrimSpace(v)
+		case "target":
+			m.MountPath = strings.TrimSpace(v)
+		case "type":
+			mountType = strings.TrimSpace(v)
+		}
+	}
+	if m.MountPath == "" {
+		return nil, fmt.Errorf("mount %q has no target", s)
+	}
+	if source == "" {
+		return nil, fmt.Errorf("mount %q has no source", s)
+	}
+	m.Name = "mount-" + sanitizeVolumeName(source)
+	switch mountType {
+	case "bind":
+		m.HostPath = source
+	case "volume", "":
+		m.PVCName = m.Name
+	default:
+		return nil, fmt.Errorf("unsupported mount type %q in %q", mountType, s)
+	}
+	return m, nil
+}
+
+func sanitizeVolumeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(strings.Trim(s, "/")))
+}
+
+// ResolveMounts parses the Mounts field into K8s-compatible volume configs.
+func (c *DevContainerConfig) ResolveMounts() ([]DevContainerMount, error) {
+	var mounts []DevContainerMount
+	for _, s := range c.Mounts {
+		m, err := parseMount(s)
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, *m)
+	}
+	return mounts, nil
 }

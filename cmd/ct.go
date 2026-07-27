@@ -71,10 +71,11 @@ still override anything --devcontainer would otherwise set.`,
 		image := ctImage
 		privileged := ctPrivileged
 		var devcfg *ct.DevContainerConfig
+		var err error
 		if ctDevcontainer != "" {
-			jsonPath, err := ct.FindDevContainerJSON(ctDevcontainer)
-			if err != nil {
-				return err
+			jsonPath, e := ct.FindDevContainerJSON(ctDevcontainer)
+			if e != nil {
+				return e
 			}
 			devcfg, err = ct.LoadDevContainerConfig(jsonPath)
 			if err != nil {
@@ -100,11 +101,19 @@ still override anything --devcontainer would otherwise set.`,
 			return fmt.Errorf("--image is required (or --devcontainer pointing at a devcontainer.json with one)")
 		}
 
+		var mounts []ct.DevContainerMount
+		if devcfg != nil {
+			mounts, err = devcfg.ResolveMounts()
+			if err != nil {
+				return err
+			}
+		}
+
 		if err := ct.Create(ct.CreateOpts{
 			Name: name, Namespace: ns, Image: image,
 			CPU: ctCPU, Mem: ctMem, Disk: ctDisk,
 			StorageClass: ctStorageClass, Privileged: privileged,
-			Init: ctInit,
+			Init: ctInit, Mounts: mounts,
 		}); err != nil {
 			return err
 		}
