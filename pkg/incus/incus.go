@@ -113,8 +113,7 @@ func Delete(name string) error {
 
 // Info gets raw JSON info for an Incus instance.
 func Info(name string) ([]byte, error) {
-	cmd := exec.Command("incus", "info", name, "--format=json")
-	return cmd.Output()
+	return defaultRunner.Run("incus", "info", name)
 }
 
 // CreateOpts options for creating an Incus instance.
