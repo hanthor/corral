@@ -38,11 +38,18 @@ func handleRDPCheck(w http.ResponseWriter, r *http.Request) {
 	jsonResp(w, http.StatusOK, map[string]any{"open": err == nil, "ip": info.IP})
 }
 
-// rdpBridge proxies a binary websocket to the VM's RDP console, the same
-// pattern as the VNC bridge. This is a raw RDP-over-websocket transport:
-// anything that can speak RDP over a websocket (an IronRDP-based client, a
-// local wsproxy) can use it.
+// rdpBridge proxies a binary websocket to the VM's RDP console. Two modes:
+// - Raw RDP (default): bridges the TCP stream directly — works with any
+//   websocket-capable RDP client or local wsproxy.
+// - RDCleanPath (?rdcleanpath=1): TLS-terminates at the proxy, sends the
+//   server cert chain to the browser, then relays the decrypted stream.
+//   This is what the IronRDP web component expects for in-browser RDP.
 func rdpBridge(ws *websocket.Conn) {
+	if ws.Request().URL.Query().Get("rdcleanpath") == "1" {
+		rdCleanPathBridge(ws)
+		return
+	}
+
 	defer ws.Close()
 	ns, name := ws.Request().PathValue("ns"), ws.Request().PathValue("name")
 	if ns == "" || name == "" {

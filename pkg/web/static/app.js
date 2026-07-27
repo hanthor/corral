@@ -1058,6 +1058,7 @@ const TABS = [
   ['summary', 'Summary'],
   ['console', 'Console'],
   ['terminal', 'Terminal'],
+  ['rdp', 'RDP'],
   ['hardware', 'Hardware'],
   ['options', 'Options'],
   ['snapshots', 'Snapshots'],
@@ -1162,6 +1163,7 @@ function renderTab(vm) {
       break;
     case 'console': connectVNC(vm, body); break;
     case 'terminal': connectTTY(vm, body); break;
+    case 'rdp': connectRDP(vm, body); break;
     case 'hardware': renderHardware(vm, body); break;
     case 'options': renderOptions(vm, body); break;
     case 'snapshots': renderSnapshots(vm, body); break;
@@ -2475,3 +2477,75 @@ loadInstanceTypes();
 refresh();
 setInterval(refresh, 5000);
 // Task panel polling now lives in the taskPanel() Alpine component (x-init="start()").
+
+// ── RDP console (IronRDP via RDCleanPath) ────────────────────────
+
+let rdpSession = null;
+
+function connectRDP(vm, body) {
+  if (!vm.running) {
+    body.innerHTML = '<p class="console-msg">VM is stopped. Start it to connect via RDP.</p>';
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="console-bar">
+      <label class="console-opt" style="margin-right:12px">
+        <input type="checkbox" id="rdp-scale" checked> Scale to fit
+      </label>
+      <button class="btn sm" id="rdp-fullscreen">${icon('expand')} Fullscreen</button>
+      <button class="btn sm" id="rdp-ctrlaltdel">Ctrl+Alt+Del</button>
+    </div>
+    <div id="rdp-screen" style="background:#000;border:1px solid var(--border);border-radius:var(--radius);min-height:400px;display:flex;align-items:center;justify-content:center">
+      <p class="console-msg">Initializing RDP…</p>
+    </div>`;
+
+  const screen = $('#rdp-screen');
+  const wsURL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/rdp/${vm.namespace}/${vm.name}?rdcleanpath=1`;
+
+  // Prompt for credentials.
+  const username = prompt('RDP username:', '');
+  if (username === null) { screen.innerHTML = '<p class="console-msg">RDP cancelled.</p>'; return; }
+  const password = prompt('RDP password:', '');
+  if (password === null) { screen.innerHTML = '<p class="console-msg">RDP cancelled.</p>'; return; }
+
+  screen.innerHTML = '';
+
+  // IronRDP uses the UserInteraction API.
+  const ironRDP = document.createElement('div');
+  ironRDP.id = 'rdp-iron';
+  screen.appendChild(ironRDP);
+
+  // Fullscreen toggles the container.
+  $('#rdp-fullscreen').onclick = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      screen.requestFullscreen();
+    }
+  };
+
+  // Ctrl+Alt+Del — IronRDP exposes this via the session.
+  $('#rdp-ctrlaltdel').onclick = () => {
+    if (rdpSession) rdpSession.ctrlAltDel();
+  };
+
+  // Initialize IronRDP via the ConfigBuilder API.
+  // The ConfigBuilder is exposed globally by iron-remote-desktop.js.
+  const cfg = new window.IronRemoteDesktop.ConfigBuilder()
+    .withUsername(username)
+    .withPassword(password)
+    .withDestination(vm.name)
+    .withProxyAddress(wsURL)
+    .withAuthToken('corral')
+    .build();
+
+  const ui = new window.IronRemoteDesktop.UserInteraction(ironRDP);
+  ui.setVisibility(true);
+  ui.connect(cfg).then((info) => {
+    rdpSession = ui;
+    info.run(); // start the RDP session loop
+  }).catch((e) => {
+    screen.innerHTML = `<p class="console-msg">RDP connection failed: ${esc(e.message || String(e))}</p>`;
+  });
+}
