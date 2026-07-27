@@ -38,7 +38,7 @@ jobs:
         run: |
           ./corral plugin list | grep incus
 
-      - name: Run Incus E2E Tests
+      - name: Run Incus LXC Container E2E Tests
         run: |
           ./corral incus create test-ct --image images:ubuntu/22.04
           ./corral list | grep test-ct
@@ -46,3 +46,20 @@ jobs:
           ./corral incus info test-ct
           ./corral incus stop test-ct
           ./corral incus delete test-ct
+
+      - name: Run Incus VM E2E Tests
+        run: |
+          # Test Incus Virtual Machine launch
+          ./corral incus create test-vm --image images:ubuntu/22.04 --vm --cpu 2 --mem 2Gi
+          ./corral list | grep test-vm
+          ./corral incus stop test-vm
+          ./corral incus delete test-vm
+
+      - name: Test Web UI Integration & Demo Seam
+        run: |
+          # Verify Web UI serves Incus aggregated endpoints in demo mode
+          ./corral web --demo --addr 127.0.0.1:8006 &
+          WEB_PID=$!
+          sleep 2
+          curl -fsS http://127.0.0.1:8006/api/vms | grep incus-demo-container
+          kill $WEB_PID
