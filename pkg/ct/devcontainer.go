@@ -35,7 +35,7 @@ type DevContainerConfig struct {
 	// events — only creation/start. The hook would trigger unpredictably.)
 	PostStartCommandRaw json.RawMessage `json:"postStartCommand"`
 	RemoteUser          string          `json:"remoteUser"`
-	ForwardPorts         []flexPort      `json:"forwardPorts"`
+	ForwardPorts        []flexPort      `json:"forwardPorts"`
 }
 
 // flexPort accepts devcontainer.json's forwardPorts entries in either form
