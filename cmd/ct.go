@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -93,19 +95,29 @@ still override anything --devcontainer would otherwise set.`,
 				} else {
 					ctx = filepath.Dir(ctx)
 				}
-				return fmt.Errorf(
-					"%s uses build.dockerfile — build and push the image first, then pass --image:\n"+
-						"  cd %s && docker build -t ghcr.io/YOU/corral-ct:%s -f %s . && docker push ghcr.io/YOU/corral-ct:%s\n"+
-						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
-					jsonPath, ctx, name, df, name, name, name, ctDevcontainer)
+
+				image, err = buildDockerfile(ctx, df, name, devcfg.Features)
+				if err != nil {
+					return fmt.Errorf(
+						"%s uses build.dockerfile — build failed: %w\n"+
+							"Build manually and pass --image:\n"+
+							"  cd %s && docker build -t ghcr.io/YOU/corral-ct:%s -f %s . && docker push ghcr.io/YOU/corral-ct:%s\n"+
+							"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+						jsonPath, err, ctx, name, df, name, name, name, ctDevcontainer)
+				}
 			}
-			if len(devcfg.Features) > 0 && string(devcfg.Features) != "null" && string(devcfg.Features) != "{}" {
-				return fmt.Errorf(
-					"%s has features — build with the devcontainer CLI first, then pass --image:\n"+
-						"  devcontainer build --workspace-folder %s --image-name ghcr.io/YOU/corral-ct:%s\n"+
-						"  docker push ghcr.io/YOU/corral-ct:%s\n"+
-						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
-					jsonPath, ctDevcontainer, name, name, name, name, ctDevcontainer)
+			if len(devcfg.Features) > 0 && string(devcfg.Features) != "null" && string(devcfg.Features) != "{}" && image == "" {
+				// Features only (no build.dockerfile): build with devcontainer CLI.
+				image, err = buildWithDevcontainer(ctDevcontainer, name)
+				if err != nil {
+					return fmt.Errorf(
+						"%s has features — build with devcontainer CLI failed: %w\n"+
+							"Build manually and pass --image:\n"+
+							"  devcontainer build --workspace-folder %s --image-name ghcr.io/YOU/corral-ct:%s\n"+
+							"  docker push ghcr.io/YOU/corral-ct:%s\n"+
+							"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+						jsonPath, err, ctDevcontainer, name, name, name, name, ctDevcontainer)
+				}
 			}
 			if image == "" {
 				image = devcfg.Image
@@ -289,4 +301,62 @@ func init() {
 	ctCreateCmd.Flags().IntSliceVar(&ctPorts, "ports", nil, "Extra ports to publish on the CT's tailnet Service, e.g. --ports 8080,3000")
 	ctCreateCmd.Flags().BoolVar(&ctInit, "init", false, "Run the image's own entrypoint instead of corral's sleep — for curated CT images (ghcr.io/tuna-os/ct-debian) whose init starts sshd")
 	ctCreateCmd.Flags().DurationVar(&ctReadyTimeout, "devcontainer-ready-timeout", 2*time.Minute, "How long to wait for the CT before running postCreateCommand")
+}
+
+// buildDockerfile runs `docker build` and `docker push` to produce an image
+// from a devcontainer.json's build.dockerfile. If features are also present,
+// uses devcontainer CLI instead (which handles both build + features).
+func buildDockerfile(ctxDir, dockerfile, ctName string, features json.RawMessage) (string, error) {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		return "", fmt.Errorf("docker is not installed — install it or build the image manually")
+	}
+
+	tag := fmt.Sprintf("corral-ct:%s", ctName)
+
+	// If features are present, the devcontainer CLI handles both build + features.
+	if len(features) > 0 && string(features) != "null" && string(features) != "{}" {
+		return buildWithDevcontainer(ctxDir, ctName)
+	}
+
+	// Plain Dockerfile build.
+	fmt.Printf("Building %s with docker (%s)…\n", dockerfile, ctxDir)
+	build := exec.Command(docker, "build", "-t", tag, "-f",
+		filepath.Join(ctxDir, dockerfile), ctxDir)
+	build.Stdout = os.Stdout
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		return "", fmt.Errorf("docker build: %w", err)
+	}
+
+	fmt.Printf("Pushing %s…\n", tag)
+	push := exec.Command(docker, "push", tag)
+	push.Stdout = os.Stdout
+	push.Stderr = os.Stderr
+	if err := push.Run(); err != nil {
+		return "", fmt.Errorf("docker push: %w (set CORRAL_REGISTRY or tag/push manually)", err)
+	}
+
+	return tag, nil
+}
+
+// buildWithDevcontainer shells out to the devcontainer CLI to build the
+// image (handles both Dockerfiles and features).
+func buildWithDevcontainer(projectDir, ctName string) (string, error) {
+	dc, err := exec.LookPath("devcontainer")
+	if err != nil {
+		return "", fmt.Errorf("devcontainer CLI is not installed — install it (npm i -g @devcontainers/cli) or build manually")
+	}
+
+	tag := fmt.Sprintf("corral-ct:%s", ctName)
+	fmt.Printf("Building with devcontainer CLI (%s)…\n", projectDir)
+	build := exec.Command(dc, "build", "--workspace-folder", projectDir,
+		"--image-name", tag)
+	build.Stdout = os.Stdout
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		return "", fmt.Errorf("devcontainer build: %w", err)
+	}
+
+	return tag, nil
 }
