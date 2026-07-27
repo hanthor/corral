@@ -42,7 +42,7 @@ env:
 
 jobs:
   e2e-kind:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=build-amd64
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

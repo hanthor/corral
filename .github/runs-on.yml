@@ -1,0 +1,10 @@
+runners:
+  build-amd64:
+    family: ["c6a", "c6i", "c5a", "c5"]
+    cpu: [8]
+    image: ubuntu24-full-x64
+    volume: 80gb:gp3
+    spot: capacity-optimized
+
+tags:
+  team: tunaos
