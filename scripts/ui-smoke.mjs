@@ -30,6 +30,7 @@ check(await page.locator('#tree >> text=Datacenter').count() > 0, 'tree renders'
 check(await page.locator('td:has-text("web-prod")').count() > 0, 'VM table lists the fleet');
 check(await page.locator('.chip.filter').count() > 2, 'tag filter bar populated');
 check(await page.locator('#tree >> text=laptop-dev').count() > 0, 'local demo VM in the tree');
+check(await page.locator('td:has-text("incus-demo-container")').count() > 0, 'Incus demo container in VM table');
 
 // VM summary.
 await page.click('#tree >> text=web-prod');
