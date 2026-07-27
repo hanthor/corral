@@ -16,12 +16,12 @@ type Config struct {
 
 // WebConfig holds web UI theme and branding overrides.
 type WebConfig struct {
-	Accent         string `yaml:"accent"`
-	Accent2        string `yaml:"accent_2"`
-	BrandTitle     string `yaml:"brand_title"`
-	BrandEmoji     string `yaml:"brand_emoji"`
-	BrandSubtitle  string `yaml:"brand_subtitle"`
-	CustomCSS      string `yaml:"custom_css"`
+	Accent        string `yaml:"accent"`
+	Accent2       string `yaml:"accent_2"`
+	BrandTitle    string `yaml:"brand_title"`
+	BrandEmoji    string `yaml:"brand_emoji"`
+	BrandSubtitle string `yaml:"brand_subtitle"`
+	CustomCSS     string `yaml:"custom_css"`
 }
 
 // FirmwareConfig holds firmware boot defaults.

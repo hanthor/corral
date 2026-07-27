@@ -6,12 +6,12 @@ import (
 )
 
 var (
-	webAddr         string
-	webAccent       string
-	webBrandTitle   string
-	webBrandEmoji   string
+	webAddr          string
+	webAccent        string
+	webBrandTitle    string
+	webBrandEmoji    string
 	webBrandSubtitle string
-	webCustomCSS    string
+	webCustomCSS     string
 )
 
 var webCmd = &cobra.Command{
