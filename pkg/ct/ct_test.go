@@ -332,3 +332,147 @@ func TestGeneratePod_InitUsesImageEntrypoint(t *testing.T) {
 		t.Errorf("privileged CT must keep the bootstrap command, got %v", ctr["command"])
 	}
 }
+
+func TestScale_UpdatesSpecAnnotation(t *testing.T) {
+	r := withFake(t)
+
+	oldSpec := `{"image":"alpine","cpu":1,"mem":"512Mi","privileged":false}`
+	r.AddResponseKV("kubectl", []string{
+		"get", "pvc", "test-scale-data", "-n", "ns",
+		"-o", "jsonpath={.metadata.annotations.corral\\.ct/spec}",
+	}, oldSpec, nil)
+
+	// PVC patch — dynamic -p value, use prefix.
+	r.AddPrefixResponse("kubectl patch pvc test-scale-data -n ns --type=json -p", "", nil)
+
+	// Pod doesn't exist (stopped CT).
+	r.AddResponseKV("kubectl", []string{
+		"get", "pod", "test-scale", "-n", "ns",
+		"-o", "name", "--ignore-not-found",
+	}, "", nil)
+
+	if err := Scale("test-scale", "ns", 2, "1Gi"); err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+
+	// Verify the PVC patch contained the updated spec.
+	calls := r.Calls()
+	var patchCall *shell.Call
+	for i := range calls {
+		if len(calls[i].Args) > 0 && calls[i].Args[0] == "patch" && calls[i].Args[1] == "pvc" {
+			patchCall = &calls[i]
+			break
+		}
+	}
+	if patchCall == nil {
+		t.Fatal("expected a kubectl patch pvc call")
+	}
+	if !containsArg(patchCall.Args, `"cpu":2`) {
+		t.Errorf("PVC patch should contain cpu:2, got args: %v", patchCall.Args)
+	}
+	if !containsArg(patchCall.Args, `"mem":"1Gi"`) {
+		t.Errorf("PVC patch should contain mem:1Gi, got args: %v", patchCall.Args)
+	}
+}
+
+func TestScale_PatchesRunningPod(t *testing.T) {
+	r := withFake(t)
+
+	oldSpec := `{"image":"alpine","cpu":1,"mem":"512Mi","privileged":false}`
+	r.AddResponseKV("kubectl", []string{
+		"get", "pvc", "test-scale-data", "-n", "ns",
+		"-o", "jsonpath={.metadata.annotations.corral\\.ct/spec}",
+	}, oldSpec, nil)
+
+	r.AddPrefixResponse("kubectl patch pvc test-scale-data -n ns --type=json -p", "", nil)
+	r.AddPrefixResponse("kubectl patch pod test-scale -n ns --type=json -p", "", nil)
+
+	// Pod exists.
+	r.AddResponseKV("kubectl", []string{
+		"get", "pod", "test-scale", "-n", "ns",
+		"-o", "name", "--ignore-not-found",
+	}, "pod/test-scale", nil)
+
+	if err := Scale("test-scale", "ns", 4, "4Gi"); err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+
+	// Verify pod patch was issued.
+	found := false
+	for _, c := range r.Calls() {
+		if len(c.Args) > 1 && c.Args[0] == "patch" && c.Args[1] == "pod" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a kubectl patch pod call for running CT")
+	}
+}
+
+func TestScale_PartialUpdate(t *testing.T) {
+	r := withFake(t)
+
+	oldSpec := `{"image":"alpine","cpu":1,"mem":"512Mi","privileged":false}`
+	r.AddResponseKV("kubectl", []string{
+		"get", "pvc", "test-scale-data", "-n", "ns",
+		"-o", "jsonpath={.metadata.annotations.corral\\.ct/spec}",
+	}, oldSpec, nil)
+
+	r.AddPrefixResponse("kubectl patch pvc test-scale-data -n ns --type=json -p", "", nil)
+	r.AddPrefixResponse("kubectl patch pod test-scale -n ns --type=json -p", "", nil)
+
+	r.AddResponseKV("kubectl", []string{
+		"get", "pod", "test-scale", "-n", "ns",
+		"-o", "name", "--ignore-not-found",
+	}, "pod/test-scale", nil)
+
+	if err := Scale("test-scale", "ns", 2, ""); err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+
+	// Pod patch should NOT contain memory changes.
+	for _, c := range r.Calls() {
+		if len(c.Args) > 1 && c.Args[0] == "patch" && c.Args[1] == "pod" {
+			for _, a := range c.Args {
+				if len(a) > 10 && containsStr(a, "memory") {
+					t.Errorf("pod patch should NOT contain memory when mem is empty, got: %v", c.Args)
+				}
+			}
+		}
+	}
+}
+
+func TestScale_ZeroIsNoop(t *testing.T) {
+	r := withFake(t)
+	r.AddResponseKV("kubectl", []string{
+		"get", "pvc", "test-scale-data", "-n", "ns",
+		"-o", "jsonpath={.metadata.annotations.corral\\.ct/spec}",
+	}, `{"image":"alpine","cpu":1,"mem":"512Mi","privileged":false}`, nil)
+	r.AddPrefixResponse("kubectl patch pvc test-scale-data -n ns --type=json -p", "", nil)
+	r.AddResponseKV("kubectl", []string{
+		"get", "pod", "test-scale", "-n", "ns",
+		"-o", "name", "--ignore-not-found",
+	}, "", nil)
+
+	if err := Scale("test-scale", "ns", 0, ""); err != nil {
+		t.Fatalf("Scale with zeros should not error: %v", err)
+	}
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func containsArg(args []string, substr string) bool {
+	for _, a := range args {
+		if containsStr(a, substr) {
+			return true
+		}
+	}
+	return false
+}
