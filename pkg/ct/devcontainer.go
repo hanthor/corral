@@ -19,6 +19,10 @@ import (
 type DevContainerConfig struct {
 	// Image is an OCI ref to boot the CT from directly.
 	Image string `json:"image"`
+	// Features, if set, means this devcontainer.json installs composable
+	// feature scripts — not supported directly, but the error message tells
+	// the user how to build with the devcontainer CLI instead.
+	Features json.RawMessage `json:"features"`
 	// Build, if set instead of Image, means this devcontainer.json builds a
 	// Dockerfile rather than pulling a ready image — not supported yet.
 	Build *struct {

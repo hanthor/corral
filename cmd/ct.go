@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -82,7 +83,29 @@ still override anything --devcontainer would otherwise set.`,
 				return err
 			}
 			if devcfg.Build != nil && image == "" {
-				return fmt.Errorf("%s builds a Dockerfile (build.dockerfile) rather than pulling an image — not supported yet; build and push an image yourself, then pass --image", jsonPath)
+				df := devcfg.Build.Dockerfile
+				if df == "" {
+					df = "Dockerfile"
+				}
+				ctx := ctDevcontainer
+				if st, err := os.Stat(ctx); err == nil && st.IsDir() {
+					// ctx is already the project dir
+				} else {
+					ctx = filepath.Dir(ctx)
+				}
+				return fmt.Errorf(
+					"%s uses build.dockerfile — build and push the image first, then pass --image:\n"+
+						"  cd %s && docker build -t ghcr.io/YOU/corral-ct:%s -f %s . && docker push ghcr.io/YOU/corral-ct:%s\n"+
+						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+					jsonPath, ctx, name, df, name, name, name, ctDevcontainer)
+			}
+			if len(devcfg.Features) > 0 && string(devcfg.Features) != "null" && string(devcfg.Features) != "{}" {
+				return fmt.Errorf(
+					"%s has features — build with the devcontainer CLI first, then pass --image:\n"+
+						"  devcontainer build --workspace-folder %s --image-name ghcr.io/YOU/corral-ct:%s\n"+
+						"  docker push ghcr.io/YOU/corral-ct:%s\n"+
+						"  corral ct create %s --image ghcr.io/YOU/corral-ct:%s --devcontainer %s",
+					jsonPath, ctDevcontainer, name, name, name, name, ctDevcontainer)
 			}
 			if image == "" {
 				image = devcfg.Image
