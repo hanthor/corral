@@ -50,7 +50,7 @@ kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/$VER/kub
 kubectl -n kubevirt wait kv kubevirt --for=condition=Available --timeout=10m
 
 # CDI (containerized data importer — imports ISOs/images into PVCs)
-CDI=$(curl -fsSL https://github.com/kubevirt/containerized-data-importer/releases/latest | grep -oP 'v[0-9.]+' | head -1)
+CDI=$(basename $(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/kubevirt/containerized-data-importer/releases/latest))
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/$CDI/cdi-operator.yaml
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/$CDI/cdi-cr.yaml
 ```
