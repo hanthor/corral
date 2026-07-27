@@ -173,8 +173,10 @@ func (Backend) StartVM(name string) error          { return Start(name) }
 func (Backend) StopVM(name string) error           { return Stop(name) }
 func (Backend) DeleteVM(name string) error         { return Delete(name) }
 func (Backend) VMInfo(name string) ([]byte, error) { return Info(name) }
-func (Backend) Viewer(name string) error           { return fmt.Errorf("viewer not supported directly for incus") }
-func (Backend) Logs(name string) error             { return fmt.Errorf("logs command not supported for incus") }
+func (Backend) Viewer(name string) error {
+	return fmt.Errorf("viewer not supported directly for incus")
+}
+func (Backend) Logs(name string) error { return fmt.Errorf("logs command not supported for incus") }
 func (Backend) SSH(name, username, identityFile, command string, port int, password string, localForwards []string) error {
 	args := []string{"exec", name, "--"}
 	if command != "" {

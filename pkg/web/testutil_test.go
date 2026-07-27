@@ -6,6 +6,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/shell"
@@ -45,6 +46,7 @@ func NewTestFixture() *TestFixture {
 	doctor.SetRunner(runner)
 	sources.SetRunner(runner)
 	ct.SetRunner(runner)
+	incus.SetRunner(runner)
 
 	// Create a temp registry store so create/delete handlers don't panic
 	tmpDir, _ := os.MkdirTemp("", "corral-test-*")
@@ -83,4 +85,5 @@ func (f *TestFixture) Reset() {
 	doctor.SetRunner(f.Runner)
 	sources.SetRunner(f.Runner)
 	ct.SetRunner(f.Runner)
+	incus.SetRunner(f.Runner)
 }

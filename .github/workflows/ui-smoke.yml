@@ -13,11 +13,6 @@ on:
       - "scripts/ui-smoke.mjs"
       - ".github/workflows/ui-smoke.yml"
   pull_request:
-    paths:
-      - "pkg/web/**"
-      - "pkg/demo/**"
-      - "scripts/ui-smoke.mjs"
-      - ".github/workflows/ui-smoke.yml"
   workflow_dispatch:
 
 permissions:
