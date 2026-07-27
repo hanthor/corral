@@ -28,21 +28,23 @@ type CreateOpts struct {
 	Disk         string              // PVC size, e.g. "5Gi"
 	StorageClass string              // "" = cluster default
 	Privileged   bool                // PVE's "Privileged" checkbox
-	Init         bool                // run the image's own entrypoint (curated CT images, e.g. ct-debian's sshd init) instead of sleep
-	Mounts       []DevContainerMount // additional volume mounts from devcontainer.json
+	Init         bool                // run the image's own entrypoint
+	Backend      string              // "kubevirt" (default) or "incus"
+	Mounts       []DevContainerMount // additional volume mounts
 }
 
 // CT describes a running or stopped Container as reported by ListCTs.
 type CT struct {
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
-	Node       string `json:"node"`  // K8s node the pod is scheduled on; "" if stopped/unscheduled
-	Phase      string `json:"phase"` // pod phase: Running, Pending, Succeeded, Failed, or "Stopped" (no pod)
-	Ready      bool   `json:"ready"` // Running and containers ready
+	Node       string `json:"node"`
+	Phase      string `json:"phase"`
+	Ready      bool   `json:"ready"`
 	Image      string `json:"image"`
 	CPU        int    `json:"cpu"`
 	Mem        string `json:"mem"`
 	Privileged bool   `json:"privileged"`
+	Backend    string `json:"backend"` // "kubevirt" or "incus"
 }
 
 // ctSpec is the subset of CreateOpts persisted as a PVC annotation. Stop
@@ -321,6 +323,9 @@ func ApplyProxy(name, namespace string, ports []int) error {
 
 // Create provisions a CT: the PVC (annotated with its spec) and the pod.
 func Create(opts CreateOpts) error {
+	if opts.Backend == "incus" {
+		return createIncus(opts)
+	}
 	if opts.Disk == "" {
 		opts.Disk = "5Gi"
 	}
@@ -513,6 +518,10 @@ func WaitReady(name, namespace string, timeout time.Duration) error {
 // (and its annotation) survives Stop, so this recreates an identical pod
 // without the caller re-specifying image/cpu/mem/privileged.
 func Start(name, namespace string) error {
+	// Try incus first.
+	if incusExists(name) {
+		return incusStart(name)
+	}
 	spec, err := specFromPVC(name, namespace)
 	if err != nil {
 		return err
@@ -523,6 +532,9 @@ func Start(name, namespace string) error {
 // Stop deletes the pod, keeping the data PVC (and its spec annotation) so
 // Start can bring it back.
 func Stop(name, namespace string) error {
+	if incusExists(name) {
+		return incusStop(name)
+	}
 	_, err := run("kubectl", "delete", "pod", name, "-n", namespace, "--ignore-not-found")
 	return err
 }
@@ -530,6 +542,9 @@ func Stop(name, namespace string) error {
 // Delete removes the CT entirely: pod, data PVC, and (if present) its
 // Service.
 func Delete(name, namespace string) error {
+	if incusExists(name) {
+		return incusDelete(name)
+	}
 	run("kubectl", "delete", "pod", name, "-n", namespace, "--ignore-not-found")
 	run("kubectl", "delete", "svc", name+"-svc", "-n", namespace, "--ignore-not-found")
 	_, err := run("kubectl", "delete", "pvc", pvcName(name), "-n", namespace, "--ignore-not-found")
@@ -621,7 +636,13 @@ func ListCTs() ([]CT, error) {
 		out = append(out, CT{
 			Name: name, Namespace: ns, Node: node, Phase: phase, Ready: ready,
 			Image: spec.Image, CPU: spec.CPU, Mem: spec.Mem, Privileged: spec.Privileged,
+			Backend: "kubevirt",
 		})
+	}
+
+	// Include incus instances as CTs.
+	if incusCTs := listIncusCTs(); len(incusCTs) > 0 {
+		out = append(out, incusCTs...)
 	}
 	return out, nil
 }
@@ -679,4 +700,102 @@ func Scale(name, namespace string, cpu int, mem string) error {
 	}
 
 	return nil
+}
+
+// ── Incus backend shim ────────────────────────────────────────────
+
+func incusExists(name string) bool {
+	cmd := exec.Command("incus", "info", name)
+	return cmd.Run() == nil
+}
+
+func incusStart(name string) error {
+	cmd := exec.Command("incus", "start", name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "already running") {
+			return nil
+		}
+		return fmt.Errorf("incus start %s: %s (%w)", name, string(out), err)
+	}
+	return nil
+}
+
+func incusStop(name string) error {
+	cmd := exec.Command("incus", "stop", name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "already stopped") || strings.Contains(string(out), "not running") {
+			return nil
+		}
+		force := exec.Command("incus", "stop", name, "--force")
+		if force.Run() == nil {
+			return nil
+		}
+		return fmt.Errorf("incus stop %s: %s (%w)", name, string(out), err)
+	}
+	return nil
+}
+
+func incusDelete(name string) error {
+	cmd := exec.Command("incus", "delete", name, "--force")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("incus delete %s: %s (%w)", name, string(out), err)
+	}
+	return nil
+}
+
+func createIncus(opts CreateOpts) error {
+	args := []string{"launch", opts.Image, opts.Name}
+	if opts.CPU > 0 {
+		args = append(args, "-c", fmt.Sprintf("limits.cpu=%d", opts.CPU))
+	}
+	if opts.Mem != "" {
+		mem := opts.Mem
+		if strings.HasSuffix(mem, "Gi") {
+			mem = strings.TrimSuffix(mem, "Gi") + "GiB"
+		} else if strings.HasSuffix(mem, "Mi") {
+			mem = strings.TrimSuffix(mem, "Mi") + "MiB"
+		}
+		args = append(args, "-c", fmt.Sprintf("limits.memory=%s", mem))
+	}
+	cmd := exec.Command("incus", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("incus create: %s (%w)", string(out), err)
+	}
+	return nil
+}
+
+func listIncusCTs() []CT {
+	cmd := exec.Command("incus", "list", "--format=json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var instances []struct {
+		Name       string            `json:"name"`
+		Status     string            `json:"status"`
+		StatusCode int               `json:"status_code"`
+		Location   string            `json:"location"`
+		Config     map[string]string `json:"config"`
+	}
+	if err := json.Unmarshal(out, &instances); err != nil {
+		return nil
+	}
+	var cts []CT
+	for _, inst := range instances {
+		running := strings.EqualFold(inst.Status, "Running")
+		cpu := 0
+		if c, ok := inst.Config["limits.cpu"]; ok {
+			cpu, _ = strconv.Atoi(c)
+		}
+		cts = append(cts, CT{
+			Name: inst.Name, Phase: inst.Status, Ready: running,
+			CPU: cpu, Mem: inst.Config["limits.memory"],
+			Node: inst.Location, Backend: "incus",
+		})
+	}
+	return cts
 }

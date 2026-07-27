@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
@@ -12,6 +13,12 @@ type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale"`
 	Firmware  FirmwareConfig  `yaml:"firmware"`
 	Web       WebConfig       `yaml:"web"`
+	CT        CTConfig        `yaml:"ct"`
+}
+
+// CTConfig holds Container defaults.
+type CTConfig struct {
+	Backend string `yaml:"backend"` // "kubevirt", "incus", or "qemu" — auto-detected on first use
 }
 
 // WebConfig holds web UI theme and branding overrides.
@@ -115,4 +122,59 @@ func DefaultFirmware() string {
 		return cfg.Firmware.Default
 	}
 	return "uefi"
+}
+
+// CTBackend returns the default CT backend: config file → auto-detect → save.
+// Probes: kubevirt (kubectl + cluster) → incus → qemu. Persists the result
+// so subsequent corral ct create calls default to the same backend.
+func CTBackend() string {
+	// Env override.
+	if v := os.Getenv("CORRAL_CT_BACKEND"); v != "" {
+		return v
+	}
+	// Config file.
+	cfg, err := Load("")
+	if err == nil && cfg.CT.Backend != "" {
+		return cfg.CT.Backend
+	}
+	// Auto-detect.
+	backend := detectCTBackend()
+	// Persist for next time.
+	if err == nil {
+		cfg.CT.Backend = backend
+		saveConfig(cfg)
+	}
+	return backend
+}
+
+func detectCTBackend() string {
+	// kubevirt: kubectl is configured and can reach a cluster.
+	if _, err := exec.LookPath("kubectl"); err == nil {
+		// Quick check: can we list nodes?
+		cmd := exec.Command("kubectl", "get", "nodes", "--request-timeout=2s")
+		if cmd.Run() == nil {
+			return "kubevirt"
+		}
+	}
+	// incus: daemon socket is active.
+	if _, err := os.Stat("/var/lib/incus/unix.socket"); err == nil {
+		return "incus"
+	}
+	if _, err := exec.LookPath("incus"); err == nil {
+		cmd := exec.Command("incus", "info")
+		if cmd.Run() == nil {
+			return "incus"
+		}
+	}
+	// Fallback: local QEMU (always returns something).
+	return "qemu"
+}
+
+func saveConfig(cfg *Config) {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return
+	}
+	os.MkdirAll(ConfigDir(), 0o700)
+	os.WriteFile(DefaultPath(), data, 0o600)
 }

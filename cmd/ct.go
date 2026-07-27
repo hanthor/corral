@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 )
@@ -25,6 +26,7 @@ var (
 	ctInit         bool
 	ctDevcontainer string
 	ctReadyTimeout time.Duration
+	ctBackend      string
 )
 
 var ctCmd = &cobra.Command{
@@ -148,7 +150,7 @@ still override anything --devcontainer would otherwise set.`,
 			Name: name, Namespace: ns, Image: image,
 			CPU: ctCPU, Mem: ctMem, Disk: ctDisk,
 			StorageClass: ctStorageClass, Privileged: privileged,
-			Init: ctInit, Mounts: mounts,
+			Init: ctInit, Mounts: mounts, Backend: ctBackend,
 		}); err != nil {
 			return err
 		}
@@ -301,6 +303,7 @@ func init() {
 	ctCreateCmd.Flags().IntSliceVar(&ctPorts, "ports", nil, "Extra ports to publish on the CT's tailnet Service, e.g. --ports 8080,3000")
 	ctCreateCmd.Flags().BoolVar(&ctInit, "init", false, "Run the image's own entrypoint instead of corral's sleep — for curated CT images (ghcr.io/tuna-os/ct-debian) whose init starts sshd")
 	ctCreateCmd.Flags().DurationVar(&ctReadyTimeout, "devcontainer-ready-timeout", 2*time.Minute, "How long to wait for the CT before running postCreateCommand")
+	ctCreateCmd.Flags().StringVar(&ctBackend, "backend", config.CTBackend(), "Container backend: kubevirt, incus, or qemu (auto-detected on first use)")
 }
 
 // buildDockerfile runs `docker build` and `docker push` to produce an image
