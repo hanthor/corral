@@ -166,7 +166,7 @@ jobs:
       - name: Build marketplace plugins (linux amd64 + arm64)
         run: |
           mkdir -p plugins-dist
-          for plugin in bootc snapsched schedule gpu windows proxmox backup; do
+          for plugin in bootc snapsched schedule gpu windows proxmox backup incus; do
             tags=""
             [ "$plugin" = bootc ] && tags="-tags bootc"
             for arch in amd64 arm64; do

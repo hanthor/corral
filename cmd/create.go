@@ -20,6 +20,7 @@ import (
 
 var (
 	createKubevirt          bool
+	createIncus             bool
 	createMem               string
 	createCPU               int
 	createDisk              string
@@ -269,6 +270,13 @@ Boot a container image as a VM? Install the bootc extension:
 			return maybeStartAndWait(name)
 		}
 
+		if createIncus {
+			if !plugin.IsInstalled("incus") {
+				return fmt.Errorf("incus plugin is not installed — run `corral plugin install incus`")
+			}
+			return plugin.Dispatch("incus", append([]string{"create", name}, os.Args[3:]...))
+		}
+
 		if createKubevirt || createImage != "" || createImport != "" {
 			return runKubevirtCreate(name)
 		}
@@ -282,6 +290,7 @@ Boot a container image as a VM? Install the bootc extension:
 func init() {
 	rootCmd.AddCommand(createCmd)
 	createCmd.Flags().BoolVarP(&createKubevirt, "kubevirt", "k", false, "Use KubeVirt backend")
+	createCmd.Flags().BoolVar(&createIncus, "incus", false, "Use Incus backend plugin")
 	createCmd.Flags().StringVar(&createMem, "mem", "4G", "Memory allocation")
 	createCmd.Flags().IntVar(&createCPU, "cpu", 2, "CPU cores")
 	createCmd.Flags().StringVar(&createDisk, "disk", "", "Disk size (default: 20G)")

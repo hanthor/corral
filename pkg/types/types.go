@@ -22,7 +22,7 @@ type Backend interface {
 // VM represents a virtual machine from either backend.
 type VM struct {
 	Name    string `json:"name"`
-	Backend string `json:"backend"` // "qemu" or "kubevirt"
+	Backend string `json:"backend"` // "qemu", "kubevirt", or "incus"
 	Status  string `json:"status"`  // "Running", "Stopped", "Starting", "↓ 42.5%"
 	Ready   bool   `json:"ready"`
 	Running bool   `json:"running"`

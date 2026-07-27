@@ -19,6 +19,7 @@ build:
 install:
     go build -ldflags "{{_ldflags}}" -o ~/.local/bin/corral .
     go build -tags bootc -ldflags "{{_ldflags}}" -o "${XDG_DATA_HOME:-$HOME/.local/share}/corral/plugins/corral-bootc" ./cmd/corral-bootc
+    go build -ldflags "{{_ldflags}}" -o "${XDG_DATA_HOME:-$HOME/.local/share}/corral/plugins/corral-incus" ./cmd/corral-incus
     @echo "✓ installed: $(~/.local/bin/corral version)"
 
 # Run the full test suite (both tag sets), race detector on.

@@ -7,7 +7,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -36,6 +38,10 @@ func runList() error {
 	vms = append(vms, kvms...)
 	qvms, _ := qemu.List()
 	vms = append(vms, qvms...)
+	if plugin.IsInstalled("incus") {
+		ivms, _ := incus.List()
+		vms = append(vms, ivms...)
+	}
 
 	if len(vms) == 0 {
 		fmt.Println("No VMs found. Create one: corral create <name>")

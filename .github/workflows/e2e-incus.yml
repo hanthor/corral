@@ -1,0 +1,48 @@
+name: Incus E2E Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "pkg/incus/**"
+      - "cmd/corral-incus/**"
+      - ".github/workflows/e2e-incus.yml"
+  workflow_dispatch:
+
+jobs:
+  e2e-incus:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install & Configure Incus
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq incus incus-client
+          sudo incus admin init --minimal
+          sudo usermod -aG incus-admin $USER
+          sudo chmod 666 /var/lib/incus/unix.socket
+
+      - name: Build Corral & Incus Plugin
+        run: |
+          go build -o corral .
+          mkdir -p ~/.local/share/corral/plugins
+          go build -o ~/.local/share/corral/plugins/corral-incus ./cmd/corral-incus
+
+      - name: Verify Plugin Discovery
+        run: |
+          ./corral plugin list | grep incus
+
+      - name: Run Incus E2E Tests
+        run: |
+          ./corral incus create test-ct --image images:ubuntu/22.04
+          ./corral list | grep test-ct
+          ./corral incus start test-ct
+          ./corral incus info test-ct
+          ./corral incus stop test-ct
+          ./corral incus delete test-ct

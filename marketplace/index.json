@@ -79,6 +79,16 @@
         "linux/amd64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-vdi-linux-amd64" },
         "linux/arm64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-vdi-linux-arm64" }
       }
+    },
+    {
+      "name": "incus",
+      "description": "Incus backend plugin — manage Incus containers and virtual machines on the local host. Run `corral incus create <name>`, `corral incus list`.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-incus",
+      "platforms": {
+        "linux/amd64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-incus-linux-amd64" },
+        "linux/arm64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-incus-linux-arm64" }
+      }
     }
   ]
 }

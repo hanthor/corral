@@ -22,6 +22,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/shell"
@@ -37,6 +38,7 @@ func Enable() shell.Runner {
 	kubevirt.SetApplyRunner(d)
 	ct.SetRunner(d)
 	doctor.SetRunner(d)
+	incus.SetRunner(d)
 	d.enableLocalBackend()
 	return d
 }
@@ -198,6 +200,12 @@ func (d *demoCluster) dispatch(stdin, name string, args []string) ([]byte, error
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if filepath.Base(name) == "incus" {
+		if len(args) >= 1 && args[0] == "list" {
+			return []byte(`[{"name":"incus-demo-container","type":"container","status":"Running","status_code":103,"location":"localhost","config":{"limits.cpu":"2","limits.memory":"2Gi"}}]`), nil
+		}
+		return []byte{}, nil
+	}
 	if filepath.Base(name) == "virtctl" && len(args) >= 2 {
 		return d.virtctl(args)
 	}
