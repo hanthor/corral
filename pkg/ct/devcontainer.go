@@ -153,11 +153,91 @@ func LoadDevContainerConfig(path string) (*DevContainerConfig, error) {
 	return &cfg, nil
 }
 
+// NamedCommand is a devcontainer lifecycle command with an optional key (the
+// map key from an object-form command like `{"install": "npm ci", "build": "go build"}`).
+// Commands from string/array form have an empty Name.
+type NamedCommand struct {
+	Name   string
+	Argv   []string
+	Script string
+}
+
+// WithUser wraps the command to run as user via `su`, same as
+// ResolvedPostCreate.WithUser.
+func (c *NamedCommand) WithUser(user string) *NamedCommand {
+	if user == "" || c == nil {
+		return c
+	}
+	script := c.Script
+	if len(c.Argv) > 0 {
+		quoted := make([]string, len(c.Argv))
+		for i, a := range c.Argv {
+			quoted[i] = shellQuote(a)
+		}
+		script = strings.Join(quoted, " ")
+	}
+	return &NamedCommand{Name: c.Name, Script: fmt.Sprintf("su -c %s %s", shellQuote(user), shellQuote(script))}
+}
+
 // ResolvedPostCreate is a devcontainer.json postCreateCommand ready to Exec:
 // exactly one of Argv/Script is set (see execArgv).
 type ResolvedPostCreate struct {
 	Argv   []string
 	Script string
+}
+
+// resolveCommands interprets a devcontainer lifecycle command (postCreateCommand,
+// postStartCommand) in any of its three JSON shapes: a bare string (shell
+// script), a []string (argv, no shell), or an object of several named commands
+// to run in parallel.
+func resolveCommands(raw json.RawMessage) ([]NamedCommand, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	// Try string form first (most common): "npm install"
+	var script string
+	if err := json.Unmarshal(raw, &script); err == nil {
+		return []NamedCommand{{Script: script}}, nil
+	}
+	// Try array form: ["npm", "ci"]
+	var argv []string
+	if err := json.Unmarshal(raw, &argv); err == nil {
+		return []NamedCommand{{Argv: argv}}, nil
+	}
+	// Try object form: {"install": "npm ci", "build": "go build ./..."}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf(
+			"postCreateCommand is not a string, array, or object — got %s", string(raw))
+	}
+	// Order of iteration over a map is random, but devcontainer.json's spec
+	// doesn't prescribe ordering; the commands are expected to be independent.
+	cmds := make([]NamedCommand, 0, len(obj))
+	for name, val := range obj {
+		if err := json.Unmarshal(val, &script); err == nil {
+			cmds = append(cmds, NamedCommand{Name: name, Script: script})
+			continue
+		}
+		if err := json.Unmarshal(val, &argv); err == nil {
+			cmds = append(cmds, NamedCommand{Name: name, Argv: argv})
+			continue
+		}
+		return nil, fmt.Errorf("command %q in object-form postCreateCommand is neither a string nor array — got %s", name, string(val))
+	}
+	return cmds, nil
+}
+
+// ResolvePostCreateCommands interprets postCreateCommand in any of its three
+// JSON shapes. Returns nil for no command; a single-element slice for string
+// or array form; multiple elements for the object form (run in parallel).
+func (c *DevContainerConfig) ResolvePostCreateCommands() ([]NamedCommand, error) {
+	return resolveCommands(c.PostCreateCommandRaw)
+}
+
+// ResolvePostStartCommands interprets postStartCommand in any of its three
+// JSON shapes. Same semantics as ResolvePostCreateCommands.
+func (c *DevContainerConfig) ResolvePostStartCommands() ([]NamedCommand, error) {
+	return resolveCommands(c.PostStartCommandRaw)
 }
 
 // ResolvePostCreate interprets postCreateCommand per its three allowed JSON

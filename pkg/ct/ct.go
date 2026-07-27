@@ -403,6 +403,49 @@ func Exec(name, namespace string, argv []string, script string) error {
 	return cmd.Run()
 }
 
+// ExecParallel runs multiple one-shot commands inside a running CT
+// concurrently, streaming each to stdout/stderr with a header prefix.
+// Returns the first error encountered, but all commands are started
+// and run to completion before returning.
+func ExecParallel(name, namespace string, cmds []NamedCommand) error {
+	if len(cmds) == 0 {
+		return nil
+	}
+	spec, err := specFromPVC(name, namespace)
+	if err != nil {
+		return err
+	}
+
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(cmds))
+
+	for _, c := range cmds {
+		go func(cmd NamedCommand) {
+			args := append([]string{"exec", name, "-n", namespace, "--"},
+				execArgv(spec.Privileged, cmd.Argv, cmd.Script)...)
+			c := exec.Command("kubectl", args...)
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			if cmd.Name != "" {
+				fmt.Printf("\n── %s ──\n", cmd.Name)
+			}
+			results <- result{name: cmd.Name, err: c.Run()}
+		}(c)
+	}
+
+	var firstErr error
+	for range len(cmds) {
+		r := <-results
+		if r.err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("command %q failed: %w", r.name, r.err)
+		}
+	}
+	return firstErr
+}
+
 // WaitReady polls ListCTs until name is Ready or timeout elapses. A
 // privileged CT's rootfs-seeding bootstrap (see bootstrapScript) runs
 // asynchronously after the pod starts, so callers that need to Exec into it

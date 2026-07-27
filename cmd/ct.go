@@ -139,40 +139,39 @@ func exposeCTPorts(name, ns string, ports []int) {
 }
 
 func applyDevContainerPostCreate(name, ns string, cfg *ct.DevContainerConfig, extraPorts []int) error {
-	post, err := cfg.ResolvePostCreate()
+	// Run all postCreate commands (single string/array or multiple named).
+	postCmds, err := cfg.ResolvePostCreateCommands()
 	if err != nil {
 		return err
 	}
-	post = post.WithUser(cfg.RemoteUser)
 
-	if post != nil {
-		fmt.Println("Waiting for the CT to be ready before running postCreateCommand…")
+	// Run all postStart commands (single string/array or multiple named).
+	postStartCmds, err := cfg.ResolvePostStartCommands()
+	if err != nil {
+		return err
+	}
+
+	allCmds := append(append([]ct.NamedCommand{}, postCmds...), postStartCmds...)
+	for i := range allCmds {
+		allCmds[i] = *allCmds[i].WithUser(cfg.RemoteUser)
+	}
+
+	if len(allCmds) > 0 {
+		fmt.Println("Waiting for the CT to be ready before running devcontainer commands…")
 		if err := ct.WaitReady(name, ns, ctReadyTimeout); err != nil {
-			return fmt.Errorf("postCreateCommand: %w", err)
+			return fmt.Errorf("devcontainer lifecycle: %w", err)
 		}
-		fmt.Println("Running postCreateCommand…")
-		if err := ct.Exec(name, ns, post.Argv, post.Script); err != nil {
-			return fmt.Errorf("postCreateCommand failed: %w", err)
-		}
-	}
 
-	// postStartCommand runs after postCreateCommand, same lifecycle semantics.
-	postStart, err := cfg.ResolvePostStart()
-	if err != nil {
-		return err
-	}
-	postStart = postStart.WithUser(cfg.RemoteUser)
-	if postStart != nil {
-		if post == nil {
-			// Only wait if we haven't already waited for postCreateCommand.
-			fmt.Println("Waiting for the CT to be ready before running postStartCommand…")
-			if err := ct.WaitReady(name, ns, ctReadyTimeout); err != nil {
-				return fmt.Errorf("postStartCommand: %w", err)
+		if len(allCmds) == 1 {
+			fmt.Println("Running lifecycle command…")
+			if err := ct.Exec(name, ns, allCmds[0].Argv, allCmds[0].Script); err != nil {
+				return fmt.Errorf("lifecycle command failed: %w", err)
 			}
-		}
-		fmt.Println("Running postStartCommand…")
-		if err := ct.Exec(name, ns, postStart.Argv, postStart.Script); err != nil {
-			return fmt.Errorf("postStartCommand failed: %w", err)
+		} else {
+			fmt.Printf("Running %d lifecycle commands in parallel…\n", len(allCmds))
+			if err := ct.ExecParallel(name, ns, allCmds); err != nil {
+				return fmt.Errorf("lifecycle commands: %w", err)
+			}
 		}
 	}
 
