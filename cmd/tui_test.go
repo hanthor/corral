@@ -86,3 +86,21 @@ func TestTUI_RenderView(t *testing.T) {
 		t.Errorf("TUI View() output missing expected VM item: %s", rendered)
 	}
 }
+
+func TestTUI_NarrowTerminalWidth(t *testing.T) {
+	demo.Enable()
+	m := newTUIModel()
+
+	// Simulate narrow terminal window (e.g. 40 columns)
+	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	updated := newModel.(tuiModel)
+
+	if updated.width != 40 || updated.height != 24 {
+		t.Errorf("expected recorded window size 40x24, got %dx%d", updated.width, updated.height)
+	}
+
+	rendered := updated.View()
+	if rendered == "" {
+		t.Error("expected non-empty render output for narrow terminal")
+	}
+}

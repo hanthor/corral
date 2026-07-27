@@ -1028,6 +1028,11 @@ func (d vmItemDelegate) Render(w io.Writer, m list.Model, index int, li list.Ite
 	name := i.Title()
 	desc := i.Description()
 
+	width := m.Width()
+	if width > 6 && len(desc) > width-4 {
+		desc = desc[:width-7] + "..."
+	}
+
 	if index == m.Index() {
 		name = tuiRunning.Render("▶ " + name)
 	} else {
