@@ -71,7 +71,7 @@ func TestClient_DeleteVM(t *testing.T) {
 	r.AddResponseKV("kubectl", []string{"delete", "vm", "testvm", "-n", "tailvm", "--ignore-not-found"}, "", nil)
 	r.AddPrefixResponse("kubectl delete pvc testvm-", "", nil)
 	r.AddPrefixResponse("kubectl delete datavolume testvm-", "", nil)
-	r.AddResponseKV("kubectl", []string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=testvm", "--ignore-not-found"}, "", nil)
+	r.AddResponseKV("kubectl", []string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=testvm", "--ignore-not-found", "--wait=false"}, "", nil)
 	r.AddResponseKV("kubectl", []string{"delete", "vmsnapshot", "-n", "tailvm", "-l", "corral.dev/vm=testvm", "--ignore-not-found"}, "", nil)
 
 	if err := c.DeleteVM("testvm"); err != nil {

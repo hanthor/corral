@@ -410,16 +410,16 @@ func TestHandleDeleteVM_Success(t *testing.T) {
 		[]string{"stop", "myvm", "-n", "tailvm"}, "", nil)
 	fx.Runner.AddResponseKV("kubectl",
 		[]string{"delete", "vm", "myvm", "-n", "tailvm", "--ignore-not-found"}, "", nil)
-	// DeleteVM also deletes PVCs and DataVolumes for each suffix
+	// DeleteVM also deletes DataVolumes and PVCs for each suffix
 	for _, suffix := range []string{"disk", "data", "iso", "bootc-disk"} {
 		pvc := "myvm-" + suffix
 		fx.Runner.AddResponseKV("kubectl",
-			[]string{"delete", "pvc", pvc, "-n", "tailvm", "--ignore-not-found"}, "", nil)
+			[]string{"delete", "datavolume", pvc, "-n", "tailvm", "--ignore-not-found", "--wait=false"}, "", nil)
 		fx.Runner.AddResponseKV("kubectl",
-			[]string{"delete", "datavolume", pvc, "-n", "tailvm", "--ignore-not-found"}, "", nil)
+			[]string{"delete", "pvc", pvc, "-n", "tailvm", "--ignore-not-found", "--wait=false"}, "", nil)
 	}
 	fx.Runner.AddResponseKV("kubectl",
-		[]string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found"}, "", nil)
+		[]string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found", "--wait=false"}, "", nil)
 	fx.Runner.AddResponseKV("kubectl",
 		[]string{"delete", "vmsnapshot", "-n", "tailvm", "-l", "corral.dev/vm=myvm", "--ignore-not-found"}, "", nil)
 
@@ -910,10 +910,10 @@ func TestHandleDeleteVM_RemovesLabeledPVCs(t *testing.T) {
 	fx.Runner.AddResponseKV("kubectl", []string{"delete", "vm", "labeled", "-n", "tailvm", "--ignore-not-found"}, "", nil)
 	for _, suffix := range []string{"disk", "data", "iso", "bootc-disk"} {
 		pvc := "labeled-" + suffix
-		fx.Runner.AddResponseKV("kubectl", []string{"delete", "pvc", pvc, "-n", "tailvm", "--ignore-not-found"}, "", nil)
-		fx.Runner.AddResponseKV("kubectl", []string{"delete", "datavolume", pvc, "-n", "tailvm", "--ignore-not-found"}, "", nil)
+		fx.Runner.AddResponseKV("kubectl", []string{"delete", "datavolume", pvc, "-n", "tailvm", "--ignore-not-found", "--wait=false"}, "", nil)
+		fx.Runner.AddResponseKV("kubectl", []string{"delete", "pvc", pvc, "-n", "tailvm", "--ignore-not-found", "--wait=false"}, "", nil)
 	}
-	fx.Runner.AddResponseKV("kubectl", []string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=labeled", "--ignore-not-found"}, "", nil)
+	fx.Runner.AddResponseKV("kubectl", []string{"delete", "pvc", "-n", "tailvm", "-l", "corral.dev/vm=labeled", "--ignore-not-found", "--wait=false"}, "", nil)
 	fx.Runner.AddResponseKV("kubectl", []string{"delete", "vmsnapshot", "-n", "tailvm", "-l", "corral.dev/vm=labeled", "--ignore-not-found"}, "", nil)
 
 	resp := mustDelete(t, fx.Server.URL+"/api/vms/tailvm/labeled")

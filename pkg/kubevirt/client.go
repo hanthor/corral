@@ -486,16 +486,22 @@ func (c *Client) DeleteVM(name string) error {
 	// Delete VM
 	c.runner().Run("kubectl", "delete", "vm", name, "-n", c.Namespace, "--ignore-not-found")
 
-	// Delete PVCs and DataVolumes
+	// Delete DataVolumes and PVCs. The DataVolume goes first: while a CDI
+	// importer pod still has the PVC mounted, deleting the PVC blocks on the
+	// pvc-protection finalizer until that pod exits, so a VM deleted mid-import
+	// used to hang this call for as long as the download took. Removing the
+	// DataVolume tears the importer down and garbage-collects its PVC.
+	// --wait=false keeps the call from blocking on finalizers either way —
+	// deletion still completes, we just don't sit on the request while it does.
 	for _, suffix := range []string{"disk", "data", "iso", "bootc-disk"} {
 		pvc := name + "-" + suffix
-		c.runner().Run("kubectl", "delete", "pvc", pvc, "-n", c.Namespace, "--ignore-not-found")
-		c.runner().Run("kubectl", "delete", "datavolume", pvc, "-n", c.Namespace, "--ignore-not-found")
+		c.runner().Run("kubectl", "delete", "datavolume", pvc, "-n", c.Namespace, "--ignore-not-found", "--wait=false")
+		c.runner().Run("kubectl", "delete", "pvc", pvc, "-n", c.Namespace, "--ignore-not-found", "--wait=false")
 	}
 
 	// Delete hotplug disks and snapshots labeled for this VM
 	c.runner().Run("kubectl", "delete", "pvc", "-n", c.Namespace,
-		"-l", "corral.dev/vm="+name, "--ignore-not-found")
+		"-l", "corral.dev/vm="+name, "--ignore-not-found", "--wait=false")
 	c.runner().Run("kubectl", "delete", "vmsnapshot", "-n", c.Namespace,
 		"-l", "corral.dev/vm="+name, "--ignore-not-found")
 
