@@ -23,7 +23,7 @@ jobs:
       - name: Install & Configure Incus
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq incus incus-client
+          sudo apt-get install -y -qq incus incus-client qemu-system-x86 qemu-utils
           sudo incus admin init --minimal
           sudo usermod -aG incus-admin $USER
           sudo chmod 666 /var/lib/incus/unix.socket
