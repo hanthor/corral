@@ -18,6 +18,7 @@ on:
       - "pkg/demo/**"
       - "scripts/ui-smoke.mjs"
       - ".github/workflows/ui-smoke.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
