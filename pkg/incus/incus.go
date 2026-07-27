@@ -82,6 +82,9 @@ func Exists(name string) bool {
 func Start(name string) error {
 	cmd := exec.Command("incus", "start", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "already running") {
+			return nil
+		}
 		return fmt.Errorf("incus start %s: %s (%w)", name, string(out), err)
 	}
 	return nil
@@ -91,6 +94,9 @@ func Start(name string) error {
 func Stop(name string) error {
 	cmd := exec.Command("incus", "stop", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "already stopped") || strings.Contains(string(out), "not running") {
+			return nil
+		}
 		return fmt.Errorf("incus stop %s: %s (%w)", name, string(out), err)
 	}
 	return nil
