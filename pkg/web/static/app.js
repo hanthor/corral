@@ -428,8 +428,13 @@ async function renderMultiview(main) {
     grid.appendChild(tile);
     try {
       const rfb = new RFB(tile.querySelector('.mv-screen'), wsURL('vnc', vm));
-      rfb.viewOnly = true; // watch, don't type — click the title to take over
+      rfb.viewOnly = false; // click tile canvas to focus and interact directly
       rfb.scaleViewport = true;
+      tile.onclick = (e) => {
+        if (!e.target.closest('.mv-title')) {
+          rfb.focus();
+        }
+      };
       rfb.addEventListener('disconnect', () => {
         tile.querySelector('.mv-screen').innerHTML = `<p class="console-msg">disconnected</p>`;
       });
