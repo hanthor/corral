@@ -30,14 +30,18 @@ flowchart TD
         Corral --> QEMU[QEMU / KVM Local]
         Corral --> KubeVirt[KubeVirt / Kubernetes]
         Corral --> CT[Pet-Pod CT / K8s]
-        Corral --> IncusPlugin[Incus Plugin / LXC]
+        Corral --> Incus[Incus / LXC and VMs]
+        Corral --> Libvirt[libvirt local or SSH URI]
+        Corral --> Peer[Remote Corral peer]
     end
 
     subgraph Access Layer
         QEMU --> Tailnet[Tailscale Tailnet]
         KubeVirt --> Tailnet
         CT --> Tailnet
-        IncusPlugin --> Tailnet
+        Incus --> Tailnet
+        Libvirt --> Tailnet
+        Peer --> Tailnet
     end
 ```
 
@@ -48,7 +52,8 @@ flowchart TD
 | **QEMU** | Local Host | QEMU / KVM + systemd | Fast, local ephemeral or dev VMs on your workstation |
 | **KubeVirt** | Cluster | KubeVirt + Kubernetes | Production VMs with live migration, PVC storage, and scaling |
 | **Container (CT)** | Cluster | Kubernetes Pod + PVC | "Pet Pods" — persistent Linux containers (Distrobox on K8s) |
-| **Incus** *(Plugin)* | Local Host | Incus / LXC Daemon | Fast, lightweight local containers and VMs via Incus daemon |
+| **Incus** | Local or remote | Incus remote | Containers and VMs managed through existing Incus trust |
+| **libvirt** | Local or remote | libvirt URI / OpenSSH | Existing domains and remote QEMU hypervisors |
 
 ---
 
@@ -57,6 +62,8 @@ flowchart TD
 ### Web Dashboard
 
 Access the Proxmox-style Web UI at `http://localhost:8006` or via `corral web`.
+
+![Automated unified fleet capture](screenshots/generated/web-fleet.png)
 
 ![Datacenter View](docs/screenshots/dashboard.png)
 
@@ -107,6 +114,8 @@ accent).
 
 Launch the interactive Bubble Tea TUI by running `corral` with no arguments (or explore in demo mode with `corral --demo`).
 
+![Automated Corral TUI capture](screenshots/generated/tui-fleet.png)
+
 The left side is a unified, searchable fleet. Wide terminals add a details
 pane with canonical ID, backend/context, placement, address, resources, and
 available operations. Failed remotes appear as partial-fleet warnings without
@@ -140,8 +149,8 @@ corral create dev-vm --iso https://example.com/ubuntu.iso --disk 40G
 # Create KubeVirt cluster VM
 corral create prod-vm --kubevirt --image fedora
 
-# Create Incus container/VM (requires corral-incus plugin)
-corral create fast-ct --incus --image images:ubuntu/22.04
+# Create on an existing Incus remote
+corral create fast-ct --backend incus --context lab --image images:ubuntu/22.04
 
 # Universal operations
 corral start dev-vm
@@ -207,7 +216,6 @@ corral plugin remove <name>
 ```
 
 #### Available Plugins:
-- `incus`: Incus container and VM backend provider.
 - `bootc`: Bootable container image VM builder.
 - `proxmox`: Proxmox VE REST API compatibility server.
 - `backup`: S3/R2 VM disk backup & restore.
@@ -240,3 +248,16 @@ documented in [backend-support.md](backend-support.md).
 ✓ QEMU KVM hardware acceleration (/dev/kvm) accessible
 ✓ Incus daemon socket (/var/lib/incus/unix.socket) active
 ```
+
+## Reproducible screenshots
+
+Documentation captures use the real built-in demo fleet. They are automated
+for both Chromium and the Bubble Tea TUI:
+
+```bash
+npm install --prefix e2e
+node scripts/capture-docs.mjs docs/screenshots/generated
+```
+
+The same command can target the TunaOS site checkout:
+`node scripts/capture-docs.mjs ../docs/static/img/screenshots/corral`.

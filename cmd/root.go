@@ -21,9 +21,9 @@ var rootBackend string
 var rootCmd = &cobra.Command{
 	Use:   "corral",
 	Short: "Corral — herd your VMs into your tailnet",
-	Long: `Corral manages virtual machines across QEMU (local)
-and KubeVirt (Kubernetes) backends, with automatic
-Tailscale service exposure for VNC, SSH, RDP, and custom ports.
+	Long: `Corral manages one fleet across local QEMU, KubeVirt clusters,
+Incus remotes, libvirt URIs, and federated Corral peers. Tailscale is a
+first-class option for VNC, SSH, RDP, and custom ports, not a requirement.
 
 Run without arguments to launch the interactive TUI.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

@@ -6,6 +6,7 @@
 //
 // Asserts the load-bearing screens render and a stateful action round-trips.
 // Fails (exit 1) on any assertion or page error.
+// For reproducible documentation images, see scripts/capture-docs.mjs.
 
 import { chromium } from 'playwright';
 
