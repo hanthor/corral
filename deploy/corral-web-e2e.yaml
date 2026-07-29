@@ -41,6 +41,8 @@ spec:
           image: ghcr.io/tuna-os/corral:latest
           imagePullPolicy: Always
           env:
+            - name: CORRAL_DEFAULT_BACKEND
+              value: kubevirt
             - name: CORRAL_NAMESPACE
               value: corral-e2e
           ports:

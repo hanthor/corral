@@ -84,7 +84,7 @@ jobs:
         run: |
           go build -tags bootc -o corral .
           kubectl create namespace corral-vms
-          ./corral web --addr 127.0.0.1:8006 > corral-web.log 2>&1 &
+          CORRAL_DEFAULT_BACKEND=kubevirt ./corral web --addr 127.0.0.1:8006 > corral-web.log 2>&1 &
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8006/api/capabilities && break
             sleep 1

@@ -158,6 +158,10 @@ spec:
           image: ghcr.io/tuna-os/corral:latest
           imagePullPolicy: Always
           env:
+            # This deployment manages its Kubernetes cluster by default. Other
+            # configured contexts remain visible in the aggregated inventory.
+            - name: CORRAL_DEFAULT_BACKEND
+              value: kubevirt
             # Default VM namespace (code default is corral-vms).
             # Override with CORRAL_NAMESPACE=custom-ns if needed.
             - name: CORRAL_NAMESPACE
