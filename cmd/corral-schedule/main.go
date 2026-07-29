@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/cronops"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
@@ -53,6 +54,9 @@ func validCron(expr string) error {
 }
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "schedule", Version: "0.1.0", Description: "VM start and stop schedules", Capabilities: []string{"cli-command", "scheduler"}, Permissions: []string{"create Kubernetes CronJobs", "mutate VM lifecycle"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var (
 		namespace       string
 		startAt, stopAt string

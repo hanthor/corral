@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"time"
+
+	"github.com/tuna-os/corral/pkg/shell"
 )
 
 // Console identifies which console protocol to bridge. See ADR-0002 for how
@@ -31,9 +33,9 @@ type ConsoleDialer interface {
 
 // RealConsoleDialer is the production ConsoleDialer: it bridges through
 // `virtctl vnc --proxy-only` (VNC) or `virtctl port-forward` (RDP).
-type RealConsoleDialer struct{}
+type RealConsoleDialer struct{ Context string }
 
-func (RealConsoleDialer) Dial(ns, name string, console Console) (net.Conn, error) {
+func (d RealConsoleDialer) Dial(ns, name string, console Console) (net.Conn, error) {
 	port, err := freePort()
 	if err != nil {
 		return nil, err
@@ -42,10 +44,10 @@ func (RealConsoleDialer) Dial(ns, name string, console Console) (net.Conn, error
 	var cmd *exec.Cmd
 	switch console {
 	case VNC:
-		cmd = exec.Command("virtctl", "vnc", name, "-n", ns,
+		cmd = shell.CommandForContext(d.Context, "virtctl", "vnc", name, "-n", ns,
 			"--proxy-only", "--port", strconv.Itoa(port))
 	case RDP:
-		cmd = exec.Command("virtctl", "port-forward", "vm/"+name,
+		cmd = shell.CommandForContext(d.Context, "virtctl", "port-forward", "vm/"+name,
 			fmt.Sprintf("%d:3389", port), "-n", ns)
 	default:
 		return nil, fmt.Errorf("unknown console kind %d", console)

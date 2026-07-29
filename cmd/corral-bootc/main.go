@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/catalog"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -44,6 +45,9 @@ func finishVM(name, ns, pvcName, image, key, mem string, cpu int, node string) e
 }
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "bootc", Version: "0.2.0", Description: "Build bootable container images into KubeVirt VMs", Capabilities: []string{"cli-command", "backend-workflow"}, Permissions: []string{"mutate Kubernetes resources", "pull container images"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var (
 		namespace, disk, mem, sshKey, node, storageClass string
 		cpu                                              int

@@ -6,22 +6,30 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 )
 
 // Plugin describes an installed extension.
 type Plugin struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Installed   bool   `json:"installed"`
-	Description string `json:"description,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Homepage    string `json:"homepage,omitempty"`
+	Name              string   `json:"name"`
+	Path              string   `json:"path"`
+	Installed         bool     `json:"installed"`
+	Description       string   `json:"description,omitempty"`
+	Version           string   `json:"version,omitempty"`
+	Homepage          string   `json:"homepage,omitempty"`
+	Source            string   `json:"source,omitempty"`
+	Pinned            bool     `json:"pinned,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	Permissions       []string `json:"permissions,omitempty"`
+	SupportedBackends []string `json:"supportedBackends,omitempty"`
 }
 
 // Dir is where Corral installs plugins. Override with CORRAL_PLUGIN_DIR.
@@ -48,10 +56,19 @@ func Installed() []Plugin {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "corral-") {
 			continue
 		}
+		info, err := e.Info()
+		if err != nil || info.Mode()&0o111 == 0 {
+			continue
+		}
+		name := strings.TrimPrefix(e.Name(), "corral-")
+		state, _ := ReadState(name)
 		ps = append(ps, Plugin{
-			Name:      strings.TrimPrefix(e.Name(), "corral-"),
+			Name:      name,
 			Path:      filepath.Join(Dir(), e.Name()),
 			Installed: true,
+			Version:   state.Version, Source: state.Source, Pinned: state.Pinned,
+			Capabilities: state.Capabilities, Permissions: state.Permissions,
+			SupportedBackends: state.SupportedBackends,
 		})
 	}
 	sort.Slice(ps, func(i, j int) bool { return ps[i].Name < ps[j].Name })
@@ -62,7 +79,7 @@ func Installed() []Plugin {
 // dir, then $PATH. Empty if not found.
 func Resolve(name string) string {
 	p := filepath.Join(Dir(), "corral-"+name)
-	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+	if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 		return p
 	}
 	if p, err := exec.LookPath("corral-" + name); err == nil {
@@ -73,6 +90,26 @@ func Resolve(name string) string {
 
 // IsInstalled reports whether a plugin named `name` is available.
 func IsInstalled(name string) bool { return Resolve(name) != "" }
+
+func Inspect(name string) (sdk.Metadata, error) {
+	bin := Resolve(name)
+	if bin == "" {
+		return sdk.Metadata{}, fmt.Errorf("plugin %q is not installed", name)
+	}
+	cmd := exec.Command(bin, "--corral-plugin-metadata")
+	out, err := cmd.Output()
+	if err != nil {
+		return sdk.Metadata{}, fmt.Errorf("plugin does not implement %s metadata: %w", sdk.API, err)
+	}
+	var meta sdk.Metadata
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return meta, fmt.Errorf("invalid plugin metadata: %w", err)
+	}
+	if meta.API != sdk.API || meta.Name != name {
+		return meta, fmt.Errorf("plugin metadata identity/API mismatch")
+	}
+	return meta, nil
+}
 
 // Dispatch execs a plugin with the given args, wiring std streams through.
 // CORRAL_PLUGIN=<name> is exported so plugins know how they were invoked.

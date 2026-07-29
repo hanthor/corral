@@ -11,11 +11,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tuna-os/corral/pkg/shell"
 )
 
 func init() {
@@ -169,7 +170,7 @@ func bootcBuildDisk(name, namespace, imageURI, sshPublicKey, diskSize, storageCl
 		return nil, fmt.Errorf("creating builder VM: %w", err)
 	}
 	if err := c.StartVM(builderName); err != nil {
-		exec.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
+		shell.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
 		return nil, fmt.Errorf("starting builder VM: %w", err)
 	}
 
@@ -179,7 +180,7 @@ func bootcBuildDisk(name, namespace, imageURI, sshPublicKey, diskSize, storageCl
 	// later `corral bootc create --resume` pick up from here instead of Step 4.
 	fmt.Fprintf(progress, "  Builder VM started — installing (this can take 20-40 min)...\n")
 	if err := waitForBuilderVM(builderName, namespace, progress); err != nil {
-		exec.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
+		shell.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
 		return nil, fmt.Errorf("bootc build failed: %w", err)
 	}
 
@@ -193,8 +194,8 @@ func bootcBuildDisk(name, namespace, imageURI, sshPublicKey, diskSize, storageCl
 // cleanupBuilder deletes the builder VM and its cloud-init secret, leaving
 // the disk PVC (which the final VM boots from) untouched.
 func cleanupBuilder(builderName, namespace string) {
-	exec.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
-	exec.Command("kubectl", "delete", "secret", builderName+"-cloudinit", "-n", namespace, "--ignore-not-found").Run()
+	shell.Command("kubectl", "delete", "vm", builderName, "-n", namespace, "--ignore-not-found").Run()
+	shell.Command("kubectl", "delete", "secret", builderName+"-cloudinit", "-n", namespace, "--ignore-not-found").Run()
 }
 
 // bootcResumeState checks whether name has a completed-but-unfinished bootc
@@ -210,7 +211,7 @@ func bootcResumeState(name, namespace string) (imageURI, pvcName string, ready, 
 	builderName := name + "-bootc-builder"
 	pvcName = name + "-bootc-disk"
 
-	out, err := exec.Command("kubectl", "get", "vm", builderName, "-n", namespace,
+	out, err := shell.Command("kubectl", "get", "vm", builderName, "-n", namespace,
 		"-o", `jsonpath={.metadata.annotations.corral\.bootc/image}`).Output()
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", pvcName, false, false // no builder (or no annotation) — nothing to resume
@@ -222,7 +223,7 @@ func bootcResumeState(name, namespace string) (imageURI, pvcName string, ready, 
 		return imageURI, pvcName, false, phase == "Failed"
 	}
 
-	if err := exec.Command("kubectl", "get", "pvc", pvcName, "-n", namespace).Run(); err != nil {
+	if err := shell.Command("kubectl", "get", "pvc", pvcName, "-n", namespace).Run(); err != nil {
 		return imageURI, pvcName, false, false // builder succeeded but the disk is gone — can't resume
 	}
 	return imageURI, pvcName, true, false
@@ -651,7 +652,7 @@ func waitForBuilderVM(name, namespace string, progress io.Writer) error {
 // clean builder poweroff whose success marker was lost to log truncation.
 func bootcDiskExists(builderName, namespace string) bool {
 	base := strings.TrimSuffix(builderName, "-bootc-builder")
-	err := exec.Command("kubectl", "get", "pvc", base+"-bootc-disk",
+	err := shell.Command("kubectl", "get", "pvc", base+"-bootc-disk",
 		"-n", namespace).Run()
 	return err == nil
 }
@@ -667,7 +668,7 @@ func bootcDiskSizeBytes(builderName, namespace string) int64 {
 	podName := base + "-sizecheck"
 
 	// Clean up any leftover from a prior attempt.
-	exec.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found", "--wait=false").Run()
+	shell.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found", "--wait=false").Run()
 	time.Sleep(2 * time.Second)
 
 	manifest := fmt.Sprintf(`{
@@ -682,10 +683,10 @@ func bootcDiskSizeBytes(builderName, namespace string) int64 {
 		}
 	}`, podName, namespace, pvcName)
 
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd := shell.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		exec.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
+		shell.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
 		_ = out
 		return -1
 	}
@@ -693,20 +694,20 @@ func bootcDiskSizeBytes(builderName, namespace string) int64 {
 	// Wait for the pod to complete (up to 60s).
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.Command("kubectl", "get", "pod", podName, "-n", namespace,
+		out, err := shell.Command("kubectl", "get", "pod", podName, "-n", namespace,
 			"-o", "jsonpath={.status.phase}").Output()
 		if err == nil && strings.TrimSpace(string(out)) == "Succeeded" {
 			break
 		}
 		if err == nil && strings.TrimSpace(string(out)) == "Failed" {
-			exec.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
+			shell.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
 			return -1
 		}
 		time.Sleep(3 * time.Second)
 	}
 
-	out, err := exec.Command("kubectl", "logs", podName, "-n", namespace).Output()
-	exec.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
+	out, err := shell.Command("kubectl", "logs", podName, "-n", namespace).Output()
+	shell.Command("kubectl", "delete", "pod", podName, "-n", namespace, "--ignore-not-found").Run()
 	if err != nil {
 		return -1
 	}
@@ -725,7 +726,7 @@ func builderSerialLog(name, namespace string) string {
 	if pod == "" {
 		return ""
 	}
-	out, err := exec.Command("kubectl", "logs", pod, "-c", "guest-console-log", "-n", namespace).Output()
+	out, err := shell.Command("kubectl", "logs", pod, "-c", "guest-console-log", "-n", namespace).Output()
 	if err != nil {
 		return ""
 	}
@@ -733,7 +734,7 @@ func builderSerialLog(name, namespace string) string {
 }
 
 func builderLauncherPod(name, namespace string) string {
-	out, err := exec.Command("kubectl", "get", "pod", "-n", namespace,
+	out, err := shell.Command("kubectl", "get", "pod", "-n", namespace,
 		"-l", "kubevirt.io/created-by",
 		"--field-selector=status.phase!=Failed",
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}").Output()
@@ -750,7 +751,7 @@ func builderLauncherPod(name, namespace string) string {
 }
 
 func builderVMIPhase(name, namespace string) string {
-	out, err := exec.Command("kubectl", "get", "vmi", name, "-n", namespace,
+	out, err := shell.Command("kubectl", "get", "vmi", name, "-n", namespace,
 		"-o", "jsonpath={.status.phase}").Output()
 	if err != nil {
 		return ""

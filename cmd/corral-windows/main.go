@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/shell"
 	"github.com/tuna-os/corral/pkg/types"
@@ -88,6 +89,9 @@ func attachDrivers(vm, ns string) error {
 }
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "windows", Version: "0.1.0", Description: "Windows VM creation workflow", Capabilities: []string{"cli-command", "backend-workflow"}, Permissions: []string{"mutate Kubernetes resources", "download installer images"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var (
 		namespace, iso, disk, mem string
 		cpu                       int

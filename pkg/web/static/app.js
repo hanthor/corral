@@ -43,7 +43,8 @@ function toast(msg) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const vmKey = (vm) => `${vm.namespace}/${vm.name}`;
+const vmKey = (vm) => `${vm.peer || ''}/${vm.context || ''}/${vm.namespace}/${vm.name}`;
+const vmURL = (vm, suffix = '') => `/api/vms/${vm.namespace}/${vm.name}${suffix}${vm.context ? `?context=${encodeURIComponent(vm.context)}` : ''}`;
 const findVM = (key) => vms.find((v) => vmKey(v) === key);
 const ctKey = (c) => `${c.namespace}/${c.name}`;
 const findCT = (key) => cts.find((c) => ctKey(c) === key);
@@ -153,14 +154,23 @@ async function loadCaps() {
   if (!caps.bootc) {
     document.querySelector('[name=sourceType] option[value=bootc]')?.remove();
   }
-  // "Create on this host" appears only when the server's host can run QEMU.
-  if (caps.local) {
-    const tf = $('#target-field');
-    if (tf) tf.hidden = false;
-  }
+  await loadCreateContexts();
   // The Windows create flow is compiled into the web server (manifest gen in
   // pkg/kubevirt), so it's always available — no plugin install needed.
   try { availableNADs = await api('/api/nads'); } catch { availableNADs = []; }
+}
+
+async function loadCreateContexts() {
+  const select = document.querySelector('#create-form [name=target]');
+  if (!select) return;
+  try {
+    const result = await api('/api/contexts');
+    const targets = result.contexts || [];
+    select.innerHTML = targets.map((c) => `<option value="${esc(c.name)}" data-backend="${esc(c.backend)}" ${c.name === result.default ? 'selected' : ''}>${esc(c.name)} · ${esc(c.backend)}${c.context ? ` · ${esc(c.context)}` : ''}</option>`).join('');
+  } catch {
+    select.innerHTML = '<option value="cluster" data-backend="kubevirt">cluster · kubevirt</option>';
+  }
+  updateSourceFields();
 }
 
 // loadWhoami fetches the caller identity and flips the UI into read-only mode
@@ -510,17 +520,26 @@ async function renderExtensions(main) {
         <span class="muted">${esc(p.version || '')}</span>
         ${p.installed ? '<span class="pill on">installed</span>' : ''}</div>
       <div class="ext-desc">${esc(p.description || '')}</div>
+      <div class="muted">${esc(p.source || '')}${p.publisher ? ` · ${esc(p.publisher)}` : ''}${p.license ? ` · ${esc(p.license)}` : ''}</div>
+      ${p.supportedBackends?.length ? `<div class="muted">Backends: ${p.supportedBackends.map(esc).join(', ')}</div>` : '<div class="muted">Backends: not declared</div>'}
+      ${p.permissions?.length ? `<div class="muted">Permissions: ${p.permissions.map(esc).join(', ')}</div>` : ''}
       <div class="ext-actions">
         ${p.installed
           ? `<button class="btn sm danger" data-ext-rm="${esc(p.name)}">Remove</button>`
-          : (p.inStore ? `<button class="btn sm primary" data-ext-add="${esc(p.name)}">Install</button>` : '')}
+          : (p.inStore ? `<button class="btn sm primary" data-ext-add="${esc(p.name)}" data-source="${esc(p.source || '')}" data-permissions="${esc((p.permissions || []).join(', '))}">Install</button>` : '')}
         ${p.homepage ? `<a class="btn sm" href="${esc(p.homepage)}" target="_blank" rel="noopener">Homepage</a>` : ''}
       </div>
     </div>`).join('')}</div>`;
   main.querySelectorAll('[data-ext-add]').forEach((b) => {
     b.onclick = async () => {
+      const permissions = b.dataset.permissions;
+      if (permissions && !confirm(`Install ${b.dataset.extAdd} and grant its declared permissions?\n\n${permissions}`)) return;
       b.disabled = true; b.textContent = 'Installing…';
-      try { await api(`/api/plugins/${b.dataset.extAdd}/install`, { method: 'POST' }); toast('Installed'); }
+      const source = b.dataset.source ? `?source=${encodeURIComponent(b.dataset.source)}` : '';
+      try { await api(`/api/plugins/${b.dataset.extAdd}/install${source}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acceptPermissions: !!permissions }),
+      }); toast('Installed'); }
       catch (e) { toast(e.message); }
       renderExtensions(main);
     };
@@ -1008,7 +1027,7 @@ function bindVMTable(root) {
       let ok = 0;
       let fail = 0;
       await Promise.all(sel.map(async (vm) => {
-        try { await api(`/api/vms/${vm.namespace}/${vm.name}/${act}`, { method: 'POST' }); ok += 1; }
+        try { await api(vmURL(vm, `/${act}`), { method: 'POST' }); ok += 1; }
         catch { fail += 1; }
       }));
       toast(`${verb}: ${ok} ok${fail ? `, ${fail} failed` : ''}`);
@@ -1071,9 +1090,16 @@ function renderVM(main, vm) {
   // local VNC port), and info — cluster concepts (migrate, snapshots, pause,
   // templates…) don't exist on this backend.
   const isLocal = vm.backend === 'qemu';
-  const tabs = isLocal
-    ? TABS.filter(([id]) => id === 'summary' || id === 'console' || id === 'yaml')
-    : TABS;
+  const isKubeVirt = vm.backend === 'kubevirt';
+  const capability = vm.capabilities || {};
+  const tabs = TABS.filter(([id]) => {
+    if (id === 'summary' || id === 'yaml') return true;
+    if (id === 'console') return !!capability.vnc;
+    if (id === 'terminal') return !!capability.tty;
+    if (id === 'rdp') return !!capability.rdp;
+    if (id === 'snapshots') return !!capability.snapshots;
+    return isKubeVirt;
+  });
   if (!tabs.some(([id]) => id === tab)) tab = 'summary';
   main.innerHTML = `
     <div class="page-head">
@@ -1081,10 +1107,10 @@ function renderVM(main, vm) {
       <span class="pill ${vm.ready ? 'on' : 'off'}">${esc(vm.status)}</span>
       ${isLocal ? '<span class="pill">local · qemu</span>' : ''}
       <div class="toolbar">
-        <button class="btn" data-act="start" ${vm.running ? 'disabled' : ''}>${icon('play')} Start</button>
-        <button class="btn" data-act="stop" ${vm.running ? '' : 'disabled'}>${icon('stop')} Stop</button>
-        <button class="btn" data-act="restart" ${vm.running ? '' : 'disabled'}>${icon('restart')} Restart</button>
-        ${isLocal ? '' : `
+        ${capability.start ? `<button class="btn" data-act="start" ${vm.running ? 'disabled' : ''}>${icon('play')} Start</button>` : ''}
+        ${capability.stop ? `<button class="btn" data-act="stop" ${vm.running ? '' : 'disabled'}>${icon('stop')} Stop</button>` : ''}
+        ${capability.start && capability.stop ? `<button class="btn" data-act="restart" ${vm.running ? '' : 'disabled'}>${icon('restart')} Restart</button>` : ''}
+        ${isKubeVirt ? `
         <button class="btn" data-act="pause" ${vm.ready ? '' : 'disabled'}>${icon('pause')} Pause</button>
         <button class="btn" data-act="unpause">${icon('play')} Resume</button>
         <button class="btn" data-act="migrate" ${vm.ready && vm.liveMigratable ? '' : 'disabled'}
@@ -1096,7 +1122,7 @@ function renderVM(main, vm) {
           title="${vm.running ? 'Stop the VM to export its disk' : 'Download a disk backup'}">${icon('download')} Export</button>
         ${vm.bootc && caps.bootc ? `<button class="btn" data-act="upgrade"
           title="Rebuild this bootc VM's disk from the latest image and restart">${icon('restart')} Upgrade</button>` : ''}`}
-        <button class="btn danger" data-act="delete">${icon('trash')} Delete</button>
+        ${capability.delete ? `<button class="btn danger" data-act="delete">${icon('trash')} Delete</button>` : ''}
       </div>
     </div>
     <div class="tabs">
@@ -1117,13 +1143,15 @@ function renderVM(main, vm) {
 
 function renderTab(vm) {
   const body = $('#tab-body');
+  const capability = vm.capabilities || {};
   switch (tab) {
     case 'summary':
-      if (vm.backend === 'qemu') {
-        // Local VM summary: no cluster concepts, no kubevirt API calls.
+      if (vm.backend !== 'kubevirt') {
+        // Non-KubeVirt summary: do not issue cluster-only API calls.
         body.innerHTML = `<dl class="props">
           <dt>Status</dt><dd>${esc(vm.status)}</dd>
-          <dt>Backend</dt><dd>local (QEMU/KVM, systemd user service)</dd>
+          <dt>Backend</dt><dd>${esc(vm.backend)}</dd>
+          <dt>Context</dt><dd>${esc(vm.context || 'local')}</dd>
           <dt>vCPUs</dt><dd>${vm.cpu}</dd>
           <dt>Memory</dt><dd>${esc(vm.mem)}</dd>
           <dt>Disk</dt><dd>${esc(vm.disk || '—')}</dd>
@@ -1154,9 +1182,9 @@ function renderTab(vm) {
       </div>
       <div id="guest-info"></div>
       <div id="powersched-box" class="panel-section"><p class="muted">loading schedule…</p></div>`;
-      if (vm.running) loadMetrics(vm);
+      if (vm.running && capability.metrics) loadMetrics(vm);
       if (vm.running) loadCPUGraph(vm);
-      if (vm.running) checkRDP(vm);
+      if (vm.running && capability.rdp) checkRDP(vm);
       if (vm.agentConnected) loadGuestInfo(vm);
       renderPowerSchedule(vm);
       bindTags(vm);
@@ -1170,7 +1198,7 @@ function renderTab(vm) {
     case 'events': renderEvents(vm, body); break;
     case 'yaml':
       body.innerHTML = `<pre class="yaml">loading…</pre>`;
-      api(`/api/vms/${vm.namespace}/${vm.name}`)
+      api(vmURL(vm))
         .then((j) => { body.querySelector('pre').textContent = JSON.stringify(j, null, 2); })
         .catch((e) => { body.querySelector('pre').textContent = e.message; });
       break;
@@ -1181,7 +1209,9 @@ async function vmAction(vm, act) {
   if (act === 'delete') {
     if (!confirm(`Delete ${vm.name} and its disks?`)) return;
     try {
-      await api(`/api/vms/${vm.namespace}/${vm.name}`, { method: 'DELETE' });
+      let target = vmURL(vm);
+      if (vm.backend === 'libvirt') target += `${target.includes('?') ? '&' : '?'}destroyStorage=true`;
+      await api(target, { method: 'DELETE' });
       select({ type: 'dc' });
     } catch (e) { toast(e.message); }
     return refresh();
@@ -1198,7 +1228,7 @@ async function vmAction(vm, act) {
     const ref = prompt('Rebuild from which bootc image?\nLeave blank to pull the latest of the current image, or enter a new image to switch.', '');
     if (ref === null) return; // cancelled
     try {
-      const res = await api(`/api/vms/${vm.namespace}/${vm.name}/bootc/rebuild`, {
+      const res = await api(vmURL(vm, '/bootc/rebuild'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: ref.trim() }),
       });
@@ -1207,13 +1237,13 @@ async function vmAction(vm, act) {
     return;
   }
   try {
-    await api(`/api/vms/${vm.namespace}/${vm.name}/${act}`, { method: 'POST' });
+    await api(vmURL(vm, `/${act}`), { method: 'POST' });
   } catch (e) { toast(e.message); }
   setTimeout(refresh, 800);
 }
 
 async function post(vm, path, body) {
-  return api(`/api/vms/${vm.namespace}/${vm.name}${path}`, {
+  return api(vmURL(vm, path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
@@ -1246,7 +1276,8 @@ async function exportVM(vm) {
   if (!fmt) return; // cancelled
   toast('Preparing backup… the download will start when ready.');
   const q = fmt === 'qcow2' ? '?format=qcow2' : '';
-  window.location.href = `/api/vms/${vm.namespace}/${vm.name}/export${q}`;
+  const base = vmURL(vm, '/export');
+  window.location.href = base + (base.includes('?') ? `&${q.slice(1)}` : q);
 }
 
 function pickExportFormat(vm) {
@@ -1317,7 +1348,7 @@ async function cloneVM(vm) {
 
 async function loadGuestInfo(vm) {
   let info;
-  try { info = await api(`/api/vms/${vm.namespace}/${vm.name}/guestinfo`); }
+  try { info = await api(vmURL(vm, '/guestinfo')); }
   catch { return; /* agent dropped */ }
   const os = info.os || {};
   const fss = Array.isArray(info.filesystems) ? info.filesystems : (info.filesystems?.items || []);
@@ -1339,7 +1370,7 @@ const gib = (b) => (Number(b || 0) / 1073741824).toFixed(1);
 // gnome-remote-desktop/xrdp) and surface how to connect.
 async function checkRDP(vm) {
   let r;
-  try { r = await api(`/api/vms/${vm.namespace}/${vm.name}/rdp`); } catch { r = { open: false }; }
+  try { r = await api(vmURL(vm, '/rdp')); } catch { r = { open: false }; }
   const el = $('#vm-rdp');
   if (!el) return; // user navigated away
   el.innerHTML = r.open
@@ -1349,7 +1380,7 @@ async function checkRDP(vm) {
 
 async function loadMetrics(vm) {
   try {
-    const m = await api(`/api/vms/${vm.namespace}/${vm.name}/metrics`);
+    const m = await api(vmURL(vm, '/metrics'));
     const el = $('#vm-usage');
     if (el) el.textContent = (m.cpu || m.mem) ? `${m.cpu || '?'} CPU · ${m.mem || '?'} mem` : 'no metrics yet';
   } catch { /* metrics-server may be absent */ }
@@ -1371,7 +1402,7 @@ async function loadCPUGraph(vm) {
     const box = $('#cpu-graph');
     if (!box) { stopCPUGraph(); return; } // navigated away
     let hist;
-    try { hist = await api(`/api/vms/${vm.namespace}/${vm.name}/metrics/history`); }
+    try { hist = await api(vmURL(vm, '/metrics/history')); }
     catch { box.innerHTML = `<p class="muted">CPU history unavailable</p>`; return; }
     box.innerHTML = cpuSparkline(hist, vm);
   };
@@ -1413,7 +1444,7 @@ async function renderPowerSchedule(vm) {
   const box = $('#powersched-box');
   if (!box) return;
   let s = {};
-  try { s = await api(`/api/vms/${vm.namespace}/${vm.name}/powerschedule`); } catch { /* form */ }
+  try { s = await api(vmURL(vm, '/powerschedule')); } catch { /* form */ }
   const has = s && (s.start || s.stop);
   box.innerHTML = `
     <h2 class="section">${icon('play')} Autostart / shutdown windows</h2>
@@ -1426,7 +1457,7 @@ async function renderPowerSchedule(vm) {
     <p class="muted">5-field cron in the cluster's timezone. e.g. start <code>0 9 * * 1-5</code>, stop <code>0 18 * * 1-5</code> = weekdays 9–6. Leave a field blank to skip that boundary.</p>`;
   $('#pwr-save').onclick = async () => {
     try {
-      await api(`/api/vms/${vm.namespace}/${vm.name}/powerschedule`, {
+      await api(vmURL(vm, '/powerschedule'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start: $('#pwr-start').value.trim(), stop: $('#pwr-stop').value.trim() }),
       });
@@ -1436,7 +1467,7 @@ async function renderPowerSchedule(vm) {
   };
   const clr = $('#pwr-clear');
   if (clr) clr.onclick = async () => {
-    try { await api(`/api/vms/${vm.namespace}/${vm.name}/powerschedule`, { method: 'DELETE' }); toast('Schedule cleared'); }
+    try { await api(vmURL(vm, '/powerschedule'), { method: 'DELETE' }); toast('Schedule cleared'); }
     catch (e) { toast(e.message); }
     renderPowerSchedule(vm);
   };
@@ -1445,7 +1476,7 @@ async function renderPowerSchedule(vm) {
 async function renderEvents(vm, body) {
   body.innerHTML = `<p class="muted">loading…</p>`;
   let evs;
-  try { evs = await api(`/api/vms/${vm.namespace}/${vm.name}/events`); }
+  try { evs = await api(vmURL(vm, '/events')); }
   catch (e) { body.innerHTML = `<p class="console-msg">${esc(e.message)}</p>`; return; }
   if (!evs.length) { body.innerHTML = `<p class="muted">No recent events.</p>`; return; }
   body.innerHTML = `<table><thead><tr>
@@ -1460,7 +1491,7 @@ async function renderEvents(vm, body) {
 async function renderHardware(vm, body) {
   body.innerHTML = `<pre class="yaml">loading…</pre>`;
   let j;
-  try { j = await api(`/api/vms/${vm.namespace}/${vm.name}`); }
+  try { j = await api(vmURL(vm)); }
   catch (e) { body.innerHTML = `<p class="console-msg">${esc(e.message)}</p>`; return; }
 
   const spec = j.spec?.template?.spec ?? {};
@@ -1557,7 +1588,7 @@ async function renderHardware(vm, body) {
     b.onclick = async () => {
       if (!confirm(`Detach ${b.dataset.rmvol}?`)) return;
       try {
-        await api(`/api/vms/${vm.namespace}/${vm.name}/volumes/${b.dataset.rmvol}`, { method: 'DELETE' });
+        await api(vmURL(vm, `/volumes/${b.dataset.rmvol}`), { method: 'DELETE' });
         toast('Detached');
       } catch (e) { toast(e.message); }
       setTimeout(() => renderHardware(vm, body), 800);
@@ -1582,7 +1613,7 @@ async function renderHardware(vm, body) {
 async function renderOptions(vm, body) {
   body.innerHTML = `<pre class="yaml">loading…</pre>`;
   let j;
-  try { j = await api(`/api/vms/${vm.namespace}/${vm.name}`); }
+  try { j = await api(vmURL(vm)); }
   catch (e) { body.innerHTML = `<p class="console-msg">${esc(e.message)}</p>`; return; }
 
   const spec = j.spec ?? {};
@@ -1712,7 +1743,7 @@ async function renderGPUs(vm) {
   if (!box) return;
   let permitted = [], attached = [];
   try { permitted = await api('/api/gpus'); } catch { /* none */ }
-  try { attached = await api(`/api/vms/${vm.namespace}/${vm.name}/gpus`); } catch { /* none */ }
+  try { attached = await api(vmURL(vm, '/gpus')); } catch { /* none */ }
 
   const rows = attached.length
     ? `<table><thead><tr><th>Name</th><th>Device</th><th></th></tr></thead><tbody>
@@ -1743,7 +1774,7 @@ async function renderGPUs(vm) {
   box.querySelectorAll('[data-rmgpu]').forEach((b) => {
     b.onclick = async () => {
       try {
-        await api(`/api/vms/${vm.namespace}/${vm.name}/gpus/${b.dataset.rmgpu}`, { method: 'DELETE' });
+        await api(vmURL(vm, `/gpus/${b.dataset.rmgpu}`), { method: 'DELETE' });
         toast('GPU detached');
       } catch (e) { toast(e.message); }
       renderGPUs(vm);
@@ -1777,7 +1808,7 @@ async function renderSnapshots(vm, body) {
   if (hasSnapsched) renderSnapSchedule(vm);
 
   let snaps = [];
-  try { snaps = await api(`/api/vms/${vm.namespace}/${vm.name}/snapshots`); }
+  try { snaps = await api(vmURL(vm, '/snapshots')); }
   catch (e) { $('#snap-rows').innerHTML = `<tr><td colspan="4">${esc(e.message)}</td></tr>`; return; }
 
   $('#snap-rows').innerHTML = snaps.length
@@ -1801,7 +1832,7 @@ async function renderSnapshots(vm, body) {
   body.querySelectorAll('[data-delsnap]').forEach((b) => {
     b.onclick = async () => {
       try {
-        await api(`/api/vms/${vm.namespace}/${vm.name}/snapshots/${b.dataset.delsnap}`, { method: 'DELETE' });
+        await api(vmURL(vm, `/snapshots/${b.dataset.delsnap}`), { method: 'DELETE' });
         toast('Deleted');
       } catch (e) { toast(e.message); }
       setTimeout(() => renderSnapshots(vm, body), 500);
@@ -1814,7 +1845,7 @@ async function renderSnapSchedule(vm) {
   const box = $('#snapsched-box');
   if (!box) return;
   let sched = {};
-  try { sched = await api(`/api/vms/${vm.namespace}/${vm.name}/snapschedule`); }
+  try { sched = await api(vmURL(vm, '/snapschedule')); }
   catch { /* show the add form */ }
 
   if (sched && sched.schedule) {
@@ -1827,7 +1858,7 @@ async function renderSnapSchedule(vm) {
       <button class="btn sm danger" id="snapsched-rm">Remove schedule</button>
       <span class="muted">Existing snapshots are kept.</span>`;
     $('#snapsched-rm').onclick = async () => {
-      try { await api(`/api/vms/${vm.namespace}/${vm.name}/snapschedule`, { method: 'DELETE' }); toast('Schedule removed'); }
+      try { await api(vmURL(vm, '/snapschedule'), { method: 'DELETE' }); toast('Schedule removed'); }
       catch (e) { toast(e.message); }
       renderSnapSchedule(vm);
     };
@@ -1854,7 +1885,7 @@ async function renderSnapSchedule(vm) {
     const every = $('#snapsched-every').value;
     const keep = parseInt($('#snapsched-keep').value, 10) || 12;
     try {
-      await api(`/api/vms/${vm.namespace}/${vm.name}/snapschedule`, {
+      await api(vmURL(vm, '/snapschedule'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ every, keep }),
       });
@@ -1866,8 +1897,10 @@ async function renderSnapSchedule(vm) {
 
 // ── Consoles ──────────────────────────────────────────────────────
 
-const wsURL = (kind, vm) =>
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/${kind}/${vm.namespace}/${vm.name}`;
+const wsURL = (kind, vm) => {
+  const base = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/${kind}/${vm.namespace}/${vm.name}`;
+  return base + (vm.context ? `?context=${encodeURIComponent(vm.context)}` : '');
+};
 
 // toggleFullscreen puts el into (or out of) browser fullscreen.
 function toggleFullscreen(el) {
@@ -2266,34 +2299,48 @@ const DEFAULT_HINT = 'Cloud-init VMs get your SSH key and Tailscale auth key (if
 // isLocalTarget: the create form is aimed at this host's QEMU, not the
 // cluster (#91 Phase 3). Local supports installer ISO / qcow2 sources only
 // (no cloud-init, no cluster fields).
+function selectedCreateBackend() {
+  const select = document.querySelector('#create-form [name=target]');
+  return select?.selectedOptions[0]?.dataset.backend || (select?.value === 'local' ? 'qemu' : 'kubevirt');
+}
+
 function isLocalTarget() {
-  return document.querySelector('#create-form [name=target]')?.value === 'local';
+  return selectedCreateBackend() === 'qemu';
 }
 
 function updateSourceFields() {
-  const local = isLocalTarget();
+  const backend = selectedCreateBackend();
+  const local = backend === 'qemu';
+  const fileBacked = backend === 'qemu' || backend === 'libvirt';
+  const kube = backend === 'kubevirt';
   const srcSel = document.querySelector('[name=sourceType]');
-  // Local target: only ISO and qcow2 import make sense — hide the rest.
+  // File-backed hypervisors accept ISO/qcow2; Incus accepts image aliases;
+  // the full source catalog is available only to KubeVirt.
   for (const opt of srcSel.options) {
-    opt.hidden = local && opt.value !== 'iso' && opt.value !== 'import';
+    opt.hidden = fileBacked
+      ? opt.value !== 'iso' && opt.value !== 'import'
+      : backend === 'incus' && opt.value !== 'containerDisk' && opt.value !== 'import';
   }
-  if (local && srcSel.value !== 'iso' && srcSel.value !== 'import') srcSel.value = 'iso';
+  if (fileBacked && srcSel.value !== 'iso' && srcSel.value !== 'import') srcSel.value = 'iso';
+  if (backend === 'incus' && srcSel.value !== 'containerDisk' && srcSel.value !== 'import') srcSel.value = 'containerDisk';
   // Cluster-only fields disappear for a local VM.
   for (const sel of ['#create-form [name=namespace]', '#create-form [name=node]',
     '#create-form [name=instancetype]', '#create-form [name=preference]',
     '#create-form [name=cloudInit]', '#sshkey-field input']) {
     const el = document.querySelector(sel);
-    if (el) el.closest('label').hidden = local;
+    if (el) el.closest('label').hidden = !kube;
   }
 
   const type = srcSel.value;
   $('#catalog-field').hidden = type !== 'catalog';
   $('#source-field').hidden = type === 'catalog' || type === 'pvc';
   $('#pvc-source-field').hidden = type !== 'pvc';
-  $('#create-hint').textContent = local
-    ? 'Local VM on this host (QEMU/KVM, systemd user service). Source can be a path on the host or a URL (downloaded once, then cached). No cloud-init on this backend.'
-    : (CREATE_HINTS[type] || DEFAULT_HINT);
-  if (local) {
+  $('#create-hint').textContent = fileBacked
+    ? `${backend} VM. Source can be a path on the Corral web host or a URL (downloaded once, then cached). Cloud-init is not yet unified for this backend.`
+    : backend === 'incus'
+      ? 'Enter an Incus image alias such as images:ubuntu/24.04. Corral creates a virtual-machine instance on this remote.'
+      : (CREATE_HINTS[type] || DEFAULT_HINT);
+  if (fileBacked) {
     const srcInput = document.querySelector('[name=source]');
     if (srcInput) {
       srcInput.placeholder = type === 'iso'
@@ -2337,6 +2384,7 @@ $('#create-form').onsubmit = async (e) => {
   const f = new FormData(e.target);
   const body = {
     name: f.get('name'),
+    target: f.get('target'),
     namespace: f.get('namespace'),
     node: f.get('node'),
     cpu: parseInt(f.get('cpu'), 10) || 2,
@@ -2348,9 +2396,9 @@ $('#create-form').onsubmit = async (e) => {
   };
   const src = f.get('source');
   const type = f.get('sourceType');
-  if (f.get('target') === 'local') {
+  if (selectedCreateBackend() === 'qemu') {
     // Local QEMU VM (#91 Phase 3): lean payload, ISO or qcow2 only.
-    const local = { name: body.name, target: 'local', cpu: body.cpu, mem: body.mem, disk: body.disk };
+    const local = { name: body.name, target: body.target, cpu: body.cpu, mem: body.mem, disk: body.disk };
     if (type === 'import') local.import = src; else local.iso = src;
     try {
       const res = await api('/api/vms', {

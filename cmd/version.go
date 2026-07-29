@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/plugin"
 )
 
 // version is the release version, stamped at build time via
@@ -88,6 +89,7 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
+	plugin.CurrentVersion, _, _ = buildInfo()
 	rootCmd.AddCommand(versionCmd)
 	// `corral --version` / `corral -v` as well, so the common reflexes work.
 	rootCmd.Version = versionString()

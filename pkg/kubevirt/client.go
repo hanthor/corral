@@ -84,6 +84,7 @@ func LoadSSHPublicKey() string {
 // Client interacts with the Kubernetes cluster via kubectl.
 type Client struct {
 	Namespace string
+	Context   string
 	Runner    shell.Runner // injected for tests; defaults to shell.Real
 }
 
@@ -94,15 +95,50 @@ func (c *Client) runner() shell.Runner {
 	if defaultClientRunner != nil {
 		return defaultClientRunner
 	}
-	return shell.DefaultKubectl
+	return shell.WithKubeContext(shell.DefaultKubectl, c.Context)
 }
 
 // defaultClientRunner is a package-level runner override for tests.
 // Set it to intercept all client calls without modifying each NewClient call site.
 var defaultClientRunner shell.Runner
+var contextScopeMu sync.Mutex
 
 // SetDefaultRunner overrides the runner for all kubevirt clients (for unit tests).
 func SetDefaultRunner(r shell.Runner) { defaultClientRunner = r }
+
+// WithContext scopes package-level create helpers (Apply, image import,
+// proxy creation) to one kubeconfig context. Client lifecycle methods already
+// carry their own runner; this bridge keeps the older manifest pipeline safe
+// until all package-level helpers become methods.
+func WithContext(context string, fn func() error) error {
+	if context == "" {
+		return fn()
+	}
+	contextScopeMu.Lock()
+	defer contextScopeMu.Unlock()
+	runnerMu.Lock()
+	oldApply, oldPackage := applyRunner, defaultPackageRunner
+	bound := shell.WithKubeContext(shell.DefaultKubectl, context)
+	applyRunner, defaultPackageRunner = bound, bound
+	runnerMu.Unlock()
+	defer func() {
+		runnerMu.Lock()
+		applyRunner, defaultPackageRunner = oldApply, oldPackage
+		runnerMu.Unlock()
+	}()
+	return fn()
+}
+
+func CreateVMInContext(opts types.CreateOpts, context string) (password string, err error) {
+	err = WithContext(context, func() error {
+		if inner := CreateVM(opts); inner != nil {
+			return inner
+		}
+		password = LastPassword
+		return nil
+	})
+	return password, err
+}
 
 // DefaultNamespace is the default namespace for KubeVirt VMs. Override with
 // CORRAL_NAMESPACE (fallback for existing deployments that predate the rename).
@@ -145,6 +181,14 @@ func NewClient(ns string) *Client {
 	return &Client{Namespace: ns}
 }
 
+// NewClientForContext binds all client operations to one kubeconfig context.
+// It does not mutate kubectl's current-context or process-global environment.
+func NewClientForContext(ns, context string) *Client {
+	c := NewClient(ns)
+	c.Context = context
+	return c
+}
+
 // NewClientWithRunner creates a KubeVirt client with a custom Runner (for tests).
 func NewClientWithRunner(ns string, r shell.Runner) *Client {
 	c := NewClient(ns)
@@ -160,7 +204,10 @@ func (c *Client) VMExists(name string) bool {
 
 // DataVolumeStatus returns the import progress for a VM's ISO DataVolume.
 func DataVolumeStatus(name, ns string) string {
-	out, err := runPkg("kubectl", "get", "datavolume", name+"-iso", "-n", ns, "-o", "json")
+	return dataVolumeStatus(getPackageRunner(), name, ns)
+}
+func dataVolumeStatus(r shell.Runner, name, ns string) string {
+	out, err := r.Run("kubectl", "get", "datavolume", name+"-iso", "-n", ns, "-o", "json")
 	if err != nil {
 		return ""
 	}
@@ -194,9 +241,16 @@ func (c *Client) ListVMs() ([]types.VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	li := launcherRunningIndex()
+	runner := c.runner()
+	li := launcherRunningIndexWithRunner(runner)
 	launcherRunning := func(name, ns string) bool { return li[ns+"/"+name] }
-	return parseVMList(out, vmiStatusIndex(), nodeVendors(), c.proxyStatus, DataVolumeStatus, launcherRunning)
+	isoStatus := func(name, ns string) string { return dataVolumeStatus(runner, name, ns) }
+	vms, err := parseVMList(out, vmiStatusIndexWithRunner(runner), nodeVendorsWithRunner(runner), c.proxyStatus, isoStatus, launcherRunning)
+	for i := range vms {
+		vms[i].Context = c.Context
+		vms[i].SetIdentity()
+	}
+	return vms, err
 }
 
 // parseVMList turns `kubectl get vms -o json` output into []types.VM. Pure
@@ -360,7 +414,10 @@ type vmiStatus struct {
 // Running with its compute container ready. Used to rescue kernel-boot VMs
 // whose VMI status is frozen (see parseVMList). One list call per refresh.
 func launcherRunningIndex() map[string]bool {
-	out, err := runPkg("kubectl", "get", "pods", "-A",
+	return launcherRunningIndexWithRunner(getPackageRunner())
+}
+func launcherRunningIndexWithRunner(r shell.Runner) map[string]bool {
+	out, err := r.Run("kubectl", "get", "pods", "-A",
 		"-l", "kubevirt.io=virt-launcher", "-o", "json")
 	if err != nil {
 		return nil
@@ -399,7 +456,10 @@ func launcherRunningIndex() map[string]bool {
 }
 
 func vmiStatusIndex() map[string]vmiStatus {
-	out, err := runPkg("kubectl", "get", "vmis", "-A", "-o", "json")
+	return vmiStatusIndexWithRunner(getPackageRunner())
+}
+func vmiStatusIndexWithRunner(r shell.Runner) map[string]vmiStatus {
+	out, err := r.Run("kubectl", "get", "vmis", "-A", "-o", "json")
 	if err != nil {
 		return nil
 	}
@@ -444,8 +504,8 @@ func vmiStatusIndex() map[string]vmiStatus {
 }
 
 func (c *Client) proxyStatus(name, ns string) string {
-	out, err := exec.Command("kubectl", "get", "deploy", name+"-proxy", "-n", ns,
-		"-o", "jsonpath={.status.readyReplicas}").Output()
+	out, err := c.runner().Run("kubectl", "get", "deploy", name+"-proxy", "-n", ns,
+		"-o", "jsonpath={.status.readyReplicas}")
 	if err != nil || len(out) == 0 {
 		return "off"
 	}
@@ -512,7 +572,7 @@ func (c *Client) DeleteVM(name string) error {
 
 // Logs tails the virt-launcher pod logs for a VM.
 func (c *Client) Logs(name string) error {
-	cmd := exec.Command("kubectl", "logs", "-n", c.Namespace,
+	cmd := shell.CommandForContext(c.Context, "kubectl", "logs", "-n", c.Namespace,
 		"-l", "vm.kubevirt.io/name="+name, "-c", "compute", "--tail=100", "-f")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -539,7 +599,7 @@ func (c *Client) SSH(name, username, identityFile, command string, port int, pas
 		return shell.RunWithSSHPass(password, virtctl, args...)
 	}
 
-	cmd := exec.Command(virtctl, args...)
+	cmd := shell.CommandForContext(c.Context, virtctl, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -588,7 +648,7 @@ func (c *Client) WaitSSH(name, username, identityFile string, timeout time.Durat
 
 	var lastErr error
 	for time.Now().Before(deadline) {
-		cmd := exec.Command(virtctl, args...)
+		cmd := shell.CommandForContext(c.Context, virtctl, args...)
 		if out, err := cmd.CombinedOutput(); err == nil {
 			return nil
 		} else {
@@ -634,7 +694,7 @@ func (c *Client) Viewer(name string) error {
 	if xdg != "" {
 		// Find free port
 		port := c.findFreePort()
-		proxy := exec.Command(virtctl, "vnc", name, "-n", c.Namespace, "--proxy-only", fmt.Sprintf("--port=%d", port))
+		proxy := shell.CommandForContext(c.Context, virtctl, "vnc", name, "-n", c.Namespace, "--proxy-only", fmt.Sprintf("--port=%d", port))
 		proxy.Stdout = os.Stderr
 		proxy.Stderr = os.Stderr
 		if err := proxy.Start(); err != nil {
@@ -647,7 +707,7 @@ func (c *Client) Viewer(name string) error {
 	}
 
 	// Fallback: virtctl vnc directly
-	cmd := exec.Command(virtctl, "vnc", name, "-n", c.Namespace)
+	cmd := shell.CommandForContext(c.Context, virtctl, "vnc", name, "-n", c.Namespace)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1332,9 +1392,9 @@ func DeleteProxy(name, ns string) error {
 		if kind != "deploy" && kind != "svc" {
 			rname = "corral-" + name + "-proxy"
 		}
-		exec.Command("kubectl", "delete", kind, rname, "-n", ns, "--ignore-not-found").Run()
+		shell.Command("kubectl", "delete", kind, rname, "-n", ns, "--ignore-not-found").Run()
 	}
-	exec.Command("kubectl", "delete", "svc", name+"-lan", "-n", ns, "--ignore-not-found").Run()
+	shell.Command("kubectl", "delete", "svc", name+"-lan", "-n", ns, "--ignore-not-found").Run()
 	return nil
 }
 

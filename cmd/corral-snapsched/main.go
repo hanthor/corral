@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/cronops"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
@@ -39,6 +40,9 @@ func addSchedule(vm, ns, cron string, keep int) error {
 }
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "snapsched", Version: "0.1.0", Description: "Scheduled KubeVirt snapshots", Capabilities: []string{"cli-command", "scheduler", "snapshots"}, Permissions: []string{"create Kubernetes CronJobs and snapshots"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var (
 		namespace string
 		every     string

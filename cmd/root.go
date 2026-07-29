@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/demo"
 	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/registry"
@@ -14,6 +15,8 @@ import (
 var registryStore *registry.Store
 var verbose bool
 var rootDemo bool
+var rootContext string
+var rootBackend string
 
 var rootCmd = &cobra.Command{
 	Use:   "corral",
@@ -24,6 +27,25 @@ Tailscale service exposure for VNC, SSH, RDP, and custom ports.
 
 Run without arguments to launch the interactive TUI.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		backend := rootBackend
+		if backend == "" {
+			backend = config.DefaultBackend()
+		}
+		context := rootContext
+		if target, ok := config.FindContext(rootContext); ok {
+			backend, context = target.Backend, target.Context
+		}
+		if rootContext != "" {
+			if backend == "incus" {
+				os.Setenv("CORRAL_INCUS_REMOTE", context)
+			} else if backend == "libvirt" {
+				os.Setenv("CORRAL_LIBVIRT_URI", context)
+			} else {
+				os.Setenv("CORRAL_KUBE_CONTEXT", context)
+			}
+		} else if context := config.KubeContext(); context != "" {
+			os.Setenv("CORRAL_KUBE_CONTEXT", context)
+		}
 		if rootDemo {
 			demo.Enable()
 		}
@@ -49,6 +71,8 @@ Run without arguments to launch the interactive TUI.`,
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&rootDemo, "demo", false,
 		"Run against a built-in fake cluster (no kubectl/cluster needed) — explore the TUI, CLI, or web UI safely")
+	rootCmd.PersistentFlags().StringVar(&rootContext, "context", "", "One-shot backend context (Incus remote or kubeconfig context)")
+	rootCmd.PersistentFlags().StringVarP(&rootBackend, "backend", "b", "", "One-shot backend (qemu, kubevirt, incus, or libvirt)")
 
 	// A runtime failure ("VM not found", cluster unreachable) is not a syntax
 	// error — dumping the whole usage block after it buries the message.

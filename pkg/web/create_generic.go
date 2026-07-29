@@ -36,6 +36,9 @@ func resolveGenericImage(req *createRequest) error {
 // flow: catalog images, container disks, import URLs, ISO installs, and
 // PVC-backed creation.
 func createGeneric(req createRequest, ns string) error {
+	return createGenericInContext(req, ns, "")
+}
+func createGenericInContext(req createRequest, ns, context string) error {
 	if err := resolveGenericImage(&req); err != nil {
 		return err
 	}
@@ -68,24 +71,22 @@ func createGeneric(req createRequest, ns string) error {
 		StorageClass:   req.StorageClass,
 	}
 	done := taskBegin("create", ns+"/"+req.Name)
-	if err := kubevirt.CreateVM(opts); err != nil {
+	password, err := kubevirt.CreateVMInContext(opts, context)
+	if err != nil {
 		done(err)
 		return err
 	}
 	done(nil)
 	if store != nil {
-		store.Set(req.Name, types.RegistryEntry{
-			Backend:   "kubevirt",
-			Namespace: ns,
-			Password:  kubevirt.LastPassword,
-		})
+		ref := types.InstanceRef{Backend: "kubevirt", Context: context, Namespace: ns, Name: req.Name}
+		store.SetRef(ref, types.RegistryEntry{Backend: "kubevirt", Context: context, Namespace: ns, Password: password})
 	}
 	// Tailnet-by-default: expose SSH/VNC/RDP on the tailnet via the Tailscale
 	// operator proxy. Best-effort and async — ApplyProxy retries for up to a
 	// minute on transient RBAC flakes, which must not block the create response.
 	go func() {
 		dp := taskBegin("tailnet expose", ns+"/"+req.Name)
-		dp(kubevirt.ApplyProxy(req.Name, ns, kubevirt.ConsolePorts))
+		dp(kubevirt.WithContext(context, func() error { return kubevirt.ApplyProxy(req.Name, ns, kubevirt.ConsolePorts) }))
 	}()
 	return nil
 }

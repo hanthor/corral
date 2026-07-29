@@ -1,7 +1,19 @@
 {
   "plugins": [
     {
+      "name": "auth",
+	  "supportedBackends": ["all"],
+      "description": "OIDC authentication gateway for corral web — authorization-code flow with PKCE, verified ID tokens, encrypted sessions, and WebSocket-capable reverse proxy. Run `corral auth --issuer ... --client-id ... --redirect-url ... --cookie-secret ...`.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-auth",
+      "platforms": {
+        "linux/amd64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-auth-linux-amd64" },
+        "linux/arm64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-auth-linux-arm64" }
+      }
+    },
+    {
       "name": "backup",
+	  "supportedBackends": ["kubevirt"],
       "description": "On-demand and scheduled VM disk backup to S3/R2 — exports a stopped VM's disk, uploads it to any rclone remote, restores via CDI image-upload. Scheduled backups run entirely in-cluster via CronJobs. Run `corral backup create <vm> --dest r2:bucket/path` or `corral backup schedule <vm> --every 24h --keep 7 --to r2:bucket/path`.",
       "version": "0.2.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-backup",
@@ -12,6 +24,7 @@
     },
     {
       "name": "bootc",
+	  "supportedBackends": ["kubevirt"],
       "description": "Boot a bootable container image as a VM — bootc install runs on-cluster, then the VM kernel-boots from the image. create / images / rebuild / upgrade / switch / status. Run `corral bootc create <name> --image ...`.",
       "version": "0.2.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-bootc",
@@ -22,6 +35,7 @@
     },
     {
       "name": "snapsched",
+	  "supportedBackends": ["kubevirt"],
       "description": "Scheduled VM snapshots with retention — a CronJob snapshots the VM per tick and prunes beyond --keep. Run `corral snapsched add <vm> --every 6h --keep 12`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-snapsched",
@@ -32,6 +46,7 @@
     },
     {
       "name": "schedule",
+	  "supportedBackends": ["kubevirt"],
       "description": "VM autostart/shutdown windows — CronJobs flip the VM's runStrategy on cron schedules. Run `corral schedule add <vm> --start \"0 9 * * 1-5\" --stop \"0 18 * * 1-5\"`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-schedule",
@@ -42,6 +57,7 @@
     },
     {
       "name": "gpu",
+	  "supportedBackends": ["kubevirt"],
       "description": "GPU/PCI passthrough — discover device-plugin resources, permit them in the KubeVirt CR, attach to VMs. Run `corral gpu list`, `corral gpu attach <vm> --device amd.com/gpu`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-gpu",
@@ -52,6 +68,7 @@
     },
     {
       "name": "windows",
+	  "supportedBackends": ["kubevirt"],
       "description": "First-class Windows VMs — UEFI + TPM + Hyper-V enlightenments, installer ISO via CDI, virtio-win driver CD-ROM, optional RDP. Run `corral windows create <name> --iso <url>`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-windows",
@@ -62,6 +79,7 @@
     },
     {
       "name": "proxmox",
+	  "supportedBackends": ["kubevirt"],
       "description": "Proxmox VE API compatibility layer — serve a /api2/json subset backed by KubeVirt, so Terraform providers and other Proxmox ecosystem tools can manage your VMs. Run `corral proxmox serve [--addr :8006]`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-proxmox",
@@ -72,6 +90,7 @@
     },
     {
       "name": "vdi",
+	  "supportedBackends": ["kubevirt"],
       "description": "Desktop pools (RFC-0001, Phase 1) — clone an already-built VM into a pool, assign members to users, connect. Run `corral vdi pool create <name> --from <golden-vm> --size N`, `corral vdi assign <pool> <user>`, `corral vdi connect <member>`. See docs/vdi.md for the full setup guide.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-vdi",
@@ -82,6 +101,7 @@
     },
     {
       "name": "incus",
+	  "supportedBackends": ["incus"],
       "description": "Incus backend plugin — manage Incus containers and virtual machines on the local host. Run `corral incus create <name>`, `corral incus list`.",
       "version": "0.1.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-incus",

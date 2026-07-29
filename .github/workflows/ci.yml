@@ -166,7 +166,7 @@ jobs:
       - name: Build marketplace plugins (linux amd64 + arm64)
         run: |
           mkdir -p plugins-dist
-          for plugin in bootc snapsched schedule gpu windows proxmox backup incus; do
+          for plugin in bootc snapsched schedule gpu windows proxmox backup auth vdi; do
             tags=""
             [ "$plugin" = bootc ] && tags="-tags bootc"
             for arch in amd64 arm64; do
@@ -175,13 +175,20 @@ jobs:
                 -o "plugins-dist/corral-$plugin-linux-$arch" "./cmd/corral-$plugin"
             done
           done
+          chmod +x scripts/generate-marketplace.sh
+          scripts/generate-marketplace.sh plugins-dist "plugins-${GITHUB_SHA}" plugins-dist/marketplace-index.json
           ls -lh plugins-dist/
 
-      - name: Publish to the rolling "plugins" release
+      - name: Publish immutable plugin release and rolling channel manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          tag="plugins-${GITHUB_SHA}"
+          gh release create "$tag" plugins-dist/corral-* \
+            --title "Corral plugins ${GITHUB_SHA::12}" \
+            --notes "Immutable marketplace plugin artifacts for ${GITHUB_SHA}." \
+            --latest=false
           gh release view plugins >/dev/null 2>&1 \
-            || gh release create plugins --title "Corral plugins" \
-                 --notes "Rolling release of marketplace plugin binaries (auto-updated by CI)." --latest=false
-          gh release upload plugins plugins-dist/* --clobber
+            || gh release create plugins --title "Corral plugin channel" \
+                 --notes "Rolling signed/checksummed marketplace manifest; artifacts are immutable releases." --latest=false
+          gh release upload plugins plugins-dist/marketplace-index.json --clobber

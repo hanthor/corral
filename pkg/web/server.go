@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,8 +27,10 @@ import (
 
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
+	"github.com/tuna-os/corral/pkg/fleet"
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/libvirt"
 	"github.com/tuna-os/corral/pkg/proxmox"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/shell"
@@ -95,6 +98,9 @@ func newMux() (http.Handler, error) {
 	mux.HandleFunc("GET /api/theme", handleGetTheme)
 	mux.HandleFunc("PUT /api/theme", handlePutTheme)
 	mux.HandleFunc("GET /api/vms", handleListVMs)
+	mux.HandleFunc("GET /api/v1/inventory", handleInventory)
+	mux.HandleFunc("GET /api/v1/meta", handleAPIMeta)
+	mux.HandleFunc("GET /api/contexts", handleContexts)
 	mux.HandleFunc("POST /api/vms", handleCreateVM)
 	mux.HandleFunc("GET /api/cts", handleListCTs)
 	mux.HandleFunc("POST /api/cts", handleCreateCT)
@@ -172,8 +178,23 @@ func newMux() (http.Handler, error) {
 	wsServer := func(h websocket.Handler) http.Handler {
 		return websocket.Server{
 			Handler: h,
-			// Accept any origin: the UI is meant for localhost/tailnet use.
-			Handshake: func(cfg *websocket.Config, r *http.Request) error { return nil },
+			Handshake: func(cfg *websocket.Config, r *http.Request) error {
+				if !authenticationRequired() {
+					return nil
+				}
+				if r.Header.Get("Corral-Service-Identity") != "" {
+					return nil
+				}
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return fmt.Errorf("websocket origin is required")
+				}
+				u, err := url.Parse(origin)
+				if err != nil || !strings.EqualFold(u.Host, r.Host) {
+					return fmt.Errorf("websocket origin %q does not match host", origin)
+				}
+				return nil
+			},
 		}
 	}
 	mux.Handle("GET /api/vnc/{ns}/{name}", wsServer(vncBridge))
@@ -182,7 +203,7 @@ func newMux() (http.Handler, error) {
 
 	// The admin gate lets safe (GET) requests through and rejects mutating
 	// requests from non-admins when CORRAL_ADMINS is set.
-	return adminGate(mux), nil
+	return peerServiceAuth(adminGate(peerGate(mux))), nil
 }
 
 // serveIndex reads the embedded index.html, injects the active theme, and
@@ -233,40 +254,36 @@ func statusFor(err error) int {
 // ── VM list ───────────────────────────────────────────────────────
 
 func handleListVMs(w http.ResponseWriter, r *http.Request) {
-	local := localVMs()
-	vms, err := kubevirt.NewClient("").ListVMs()
-	if err != nil {
-		// No cluster but local QEMU VMs exist → the dashboard still works,
-		// local-only. Only a machine with neither gets the offline page.
-		if len(local) > 0 {
-			jsonResp(w, http.StatusOK, local)
-			return
-		}
-		errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs (is kubectl configured?): %w", err))
+	result := fleet.List(r.Context())
+	vms := append(result.VMs, peerVMs()...)
+	if len(vms) == 0 && len(config.Peers()) == 0 && result.Errors["kubevirt"] != "" {
+		errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %s", result.Errors["kubevirt"]))
 		return
-	}
-
-	// Merge live VMI data (IP, node) for running VMs.
-	for key, vmi := range vmiIndex() {
-		for i := range vms {
-			if vms[i].Namespace+"/"+vms[i].Name == key {
-				if vmi.IP != "" {
-					vms[i].IP = vmi.IP
-				}
-				if vmi.Node != "" {
-					vms[i].Node = vmi.Node
-				}
-			}
-		}
-	}
-	vms = append(vms, local...)
-	if incusVMs, err := incus.List(); err == nil && len(incusVMs) > 0 {
-		vms = append(vms, incusVMs...)
 	}
 	if vms == nil {
 		vms = []types.VM{}
 	}
+	if len(result.Errors) > 0 {
+		w.Header().Set("X-Corral-Partial", "true")
+	}
 	jsonResp(w, http.StatusOK, vms)
+}
+
+func handleInventory(w http.ResponseWriter, r *http.Request) {
+	result := fleet.List(r.Context())
+	result.VMs = append(result.VMs, peerVMs()...)
+	jsonResp(w, http.StatusOK, result)
+}
+
+func handleAPIMeta(w http.ResponseWriter, _ *http.Request) {
+	jsonResp(w, http.StatusOK, map[string]any{
+		"protocol": 1,
+		"features": []string{"inventory", "peer-relay", "service-token", "instance-capabilities"},
+	})
+}
+
+func kubeClient(r *http.Request, ns string) *kubevirt.Client {
+	return kubevirt.NewClientForContext(ns, r.URL.Query().Get("context"))
 }
 
 type vmiInfo struct {
@@ -328,7 +345,7 @@ type createRequest struct {
 	Preference    string `json:"preference"`
 	Windows       bool   `json:"windows"`      // Windows installer flow (windows plugin)
 	StorageClass  string `json:"storageClass"` // overrides the cluster-preferred StorageClass
-	Target        string `json:"target"`       // "" / "cluster" (KubeVirt) or "local" (QEMU on this host, #91)
+	Target        string `json:"target"`       // named Corral context; legacy "cluster" and "local" remain accepted
 }
 
 // buildTask tracks a long-running bootc build kicked off from the UI.
@@ -410,14 +427,23 @@ func handleCreateVM(w http.ResponseWriter, r *http.Request) {
 		ns = kubevirt.DefaultNamespace
 	}
 
-	if req.Target == "local" {
+	target, err := resolveCreateTarget(req.Target)
+	if err != nil {
+		errResp(w, http.StatusBadRequest, err)
+		return
+	}
+	if target.Backend == "qemu" {
 		createLocalVM(w, req)
+		return
+	}
+	if target.Backend != "kubevirt" {
+		createBackendVM(w, req, target)
 		return
 	}
 
 	switch {
 	case req.Bootc != "":
-		id, _, err := createBootc(req, ns)
+		id, _, err := createBootcInContext(req, ns, target.Context)
 		if err != nil {
 			errResp(w, statusFor(err), err)
 			return
@@ -425,14 +451,14 @@ func handleCreateVM(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusAccepted, map[string]string{"task": id})
 
 	case req.Windows:
-		if err := createWindows(req, ns); err != nil {
+		if err := createWindowsInContext(req, ns, target.Context); err != nil {
 			errResp(w, statusFor(err), err)
 			return
 		}
 		jsonResp(w, http.StatusCreated, map[string]string{"name": req.Name, "namespace": ns})
 
 	default:
-		if err := createGeneric(req, ns); err != nil {
+		if err := createGenericInContext(req, ns, target.Context); err != nil {
 			errResp(w, statusFor(err), err)
 			return
 		}
@@ -440,15 +466,87 @@ func handleCreateVM(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleContexts(w http.ResponseWriter, _ *http.Request) {
+	jsonResp(w, http.StatusOK, map[string]any{"default": config.DefaultContext().Name, "contexts": config.Contexts()})
+}
+
+func resolveCreateTarget(name string) (config.ContextConfig, error) {
+	switch name {
+	case "":
+		// Backward compatibility for API clients predating named targets. The
+		// current web UI always sends its selected/default context explicitly.
+		return config.ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: config.KubeContext()}, nil
+	case "local":
+		return config.ContextConfig{Name: "local", Backend: "qemu"}, nil
+	case "cluster":
+		return config.ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: config.KubeContext()}, nil
+	default:
+		if target, ok := config.FindContext(name); ok {
+			return target, nil
+		}
+		return config.ContextConfig{}, fmt.Errorf("unknown context %q", name)
+	}
+}
+
 func handleVMAction(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
+	if peer, remoteNS, ok := parsePeerNamespace(ns); ok {
+		proxyPeerVM(w, r, peer, remoteNS)
+		return
+	}
 	action := r.PathValue("action")
+	if ns == "incus" {
+		c := incus.NewClient(r.URL.Query().Get("context"))
+		var err error
+		switch action {
+		case "start":
+			err = c.Start(name)
+		case "stop":
+			err = c.Stop(name)
+		case "restart":
+			if err = c.Stop(name); err == nil {
+				err = c.Start(name)
+			}
+		default:
+			errResp(w, 400, fmt.Errorf("%q is not supported for Incus instances", action))
+			return
+		}
+		if err != nil {
+			errResp(w, 500, err)
+			return
+		}
+		jsonResp(w, 200, map[string]string{"status": "ok"})
+		return
+	}
+	if ns == "libvirt" {
+		c := libvirt.NewClient(r.URL.Query().Get("context"))
+		var err error
+		switch action {
+		case "start":
+			err = c.Start(name)
+		case "stop":
+			err = c.Stop(name)
+		case "restart":
+			if err = c.Stop(name); err == nil {
+				err = c.Start(name)
+			}
+		default:
+			errResp(w, 400, fmt.Errorf("%q is not supported for libvirt domains", action))
+			return
+		}
+		if err != nil {
+			errResp(w, 500, err)
+			return
+		}
+		jsonResp(w, 200, map[string]string{"status": "ok"})
+		return
+	}
 	if ns == localNS {
 		localVMAction(w, name, action)
 		return
 	}
 
-	c := kubevirt.NewClient(ns)
+	c := kubeClient(r, ns)
 	var err error
 	done := taskBegin(action, ns+"/"+name)
 	switch action {
@@ -492,7 +590,7 @@ func handleMigrate(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&b) // empty body = let the scheduler choose
 
-	c := kubevirt.NewClient(ns)
+	c := kubeClient(r, ns)
 	if err := c.Migrate(name, b.TargetNode); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -575,7 +673,7 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("format") == "qcow2" {
-		exportQcow2(w, ns, name)
+		exportQcow2(w, r, ns, name)
 		return
 	}
 	tmp, err := os.CreateTemp("", name+"-*.img.gz")
@@ -587,7 +685,7 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	tmp.Close()
 	defer os.Remove(tmpName)
 
-	if _, err := kubevirt.NewClient(ns).Export(name, "", tmpName); err != nil {
+	if _, err := kubeClient(r, ns).Export(name, "", tmpName); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -609,7 +707,7 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 // qemu-img, and streams the result. Needs qemu-img on the server and scratch
 // space sized to the raw disk; degrades to a clear error otherwise (the default
 // raw.gz export still works without either).
-func exportQcow2(w http.ResponseWriter, ns, name string) {
+func exportQcow2(w http.ResponseWriter, r *http.Request, ns, name string) {
 	qemuImg, err := exec.LookPath("qemu-img")
 	if err != nil {
 		errResp(w, http.StatusNotImplemented,
@@ -625,7 +723,7 @@ func exportQcow2(w http.ResponseWriter, ns, name string) {
 	rawPath := filepath.Join(dir, name+".raw")
 	qcowPath := filepath.Join(dir, name+".qcow2")
 
-	if _, err := kubevirt.NewClient(ns).ExportRaw(name, "", rawPath); err != nil {
+	if _, err := kubeClient(r, ns).ExportRaw(name, "", rawPath); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -662,6 +760,30 @@ func convertRawToQcow2(qemuImg, rawPath, qcowPath string) error {
 
 func handleDeleteVM(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
+	if peer, remoteNS, ok := parsePeerNamespace(ns); ok {
+		proxyPeerVM(w, r, peer, remoteNS)
+		return
+	}
+	if ns == "incus" {
+		if err := incus.NewClient(r.URL.Query().Get("context")).Delete(name); err != nil {
+			errResp(w, 500, err)
+			return
+		}
+		jsonResp(w, 200, map[string]string{"status": "deleted"})
+		return
+	}
+	if ns == "libvirt" {
+		if r.URL.Query().Get("destroyStorage") != "true" {
+			errResp(w, http.StatusBadRequest, fmt.Errorf("libvirt deletion requires destroyStorage=true because it permanently removes domain disks"))
+			return
+		}
+		if err := libvirt.NewClient(r.URL.Query().Get("context")).Delete(name); err != nil {
+			errResp(w, 500, err)
+			return
+		}
+		jsonResp(w, 200, map[string]string{"status": "deleted"})
+		return
+	}
 	done := taskBegin("delete", ns+"/"+name)
 	if ns == localNS {
 		if err := qemu.Delete(name); err != nil {
@@ -676,7 +798,7 @@ func handleDeleteVM(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "deleted"})
 		return
 	}
-	if err := kubevirt.NewClient(ns).DeleteVM(name); err != nil {
+	if err := kubeClient(r, ns).DeleteVM(name); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -690,12 +812,36 @@ func handleDeleteVM(w http.ResponseWriter, r *http.Request) {
 
 func handleVMInfo(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
+	if peer, remoteNS, ok := parsePeerNamespace(ns); ok {
+		proxyPeerVM(w, r, peer, remoteNS)
+		return
+	}
+	if ns == "incus" {
+		data, err := incus.NewClient(r.URL.Query().Get("context")).Info(name)
+		if err != nil {
+			errResp(w, 404, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(data)
+		return
+	}
+	if ns == "libvirt" {
+		data, err := libvirt.NewClient(r.URL.Query().Get("context")).Info(name)
+		if err != nil {
+			errResp(w, 404, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(data)
+		return
+	}
 	var data []byte
 	var err error
 	if ns == localNS {
 		data, err = qemu.Info(name)
 	} else {
-		data, err = kubevirt.NewClient(ns).VMInfo(name)
+		data, err = kubeClient(r, ns).VMInfo(name)
 	}
 	if err != nil {
 		errResp(w, http.StatusNotFound, err)
@@ -793,6 +939,9 @@ func vncBridge(ws *websocket.Conn) {
 	if ns == "" || name == "" {
 		return
 	}
+	if bridgePeerConsole(ws, "vnc") {
+		return
+	}
 
 	// Local QEMU VMs (#91 Phase 2): their VNC server is a plain TCP listener
 	// on this host — dial it directly instead of the virtctl proxy.
@@ -800,6 +949,10 @@ func vncBridge(ws *websocket.Conn) {
 	var err error
 	if ns == localNS {
 		conn, err = dialLocalVNC(name)
+	} else if ns == "libvirt" {
+		conn, err = libvirt.NewClient(ws.Request().URL.Query().Get("context")).DialVNC(name)
+	} else if context := ws.Request().URL.Query().Get("context"); context != "" {
+		conn, err = (kubevirt.RealConsoleDialer{Context: context}).Dial(ns, name, kubevirt.VNC)
 	} else {
 		conn, err = consoleDialer.Dial(ns, name, kubevirt.VNC)
 	}
@@ -826,12 +979,23 @@ func ttyBridge(ws *websocket.Conn) {
 	if ns == "" || name == "" {
 		return
 	}
+	if bridgePeerConsole(ws, "tty") {
+		return
+	}
+	if ns == "incus" {
+		remote := rURLContext(ws.Request())
+		if remote == "" {
+			remote = config.IncusRemote()
+		}
+		bridgeConsolePTY(ws, exec.Command("incus", "exec", remote+":"+name, "--", "bash"))
+		return
+	}
 
-	isVM := kubevirt.NewClient(ns).VMExists(name)
+	isVM := kubevirt.NewClientForContext(ns, ws.Request().URL.Query().Get("context")).VMExists(name)
 
 	ws.PayloadType = websocket.BinaryFrame
 	if isVM {
-		bridgeConsolePipes(ws, exec.Command("virtctl", "console", name, "-n", ns))
+		bridgeConsolePipes(ws, shell.CommandForContext(ws.Request().URL.Query().Get("context"), "virtctl", "console", name, "-n", ns))
 		return
 	}
 	// kubectl exec's -t requires a real local TTY on its end — it checks
@@ -845,8 +1009,10 @@ func ttyBridge(ws *websocket.Conn) {
 		return
 	}
 	args := append([]string{"exec", "-i", "-t", name, "-n", ns, "--"}, shellCmd...)
-	bridgeConsolePTY(ws, exec.Command("kubectl", args...))
+	bridgeConsolePTY(ws, shell.CommandForContext(ws.Request().URL.Query().Get("context"), "kubectl", args...))
 }
+
+func rURLContext(r *http.Request) string { return r.URL.Query().Get("context") }
 
 // bridgeConsolePipes wires cmd's stdin/stdout to ws via plain OS pipes —
 // fine for commands (like virtctl console) that don't check isatty.

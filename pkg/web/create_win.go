@@ -14,21 +14,22 @@ import (
 // the generated Administrator password is saved to the registry the same
 // way cloud-init VM passwords already are.
 func createWindows(req createRequest, ns string) error {
+	return createWindowsInContext(req, ns, "")
+}
+func createWindowsInContext(req createRequest, ns, context string) error {
 	if req.ISO == "" {
 		return badRequest(fmt.Errorf("a Windows installer ISO URL is required"))
 	}
 	done := taskBegin("create windows", ns+"/"+req.Name)
-	password, err := kubevirt.CreateWindowsVM(req.Name, ns, req.ISO, req.Disk, req.Mem, req.CPU, true)
+	password, err := kubevirt.CreateWindowsVMInContext(req.Name, ns, req.ISO, req.Disk, req.Mem, req.CPU, true, context)
 	if err != nil {
 		done(err)
 		return err
 	}
 	done(nil)
 	if store != nil {
-		store.Set(req.Name, types.RegistryEntry{
-			Backend: "kubevirt", Namespace: ns,
-			Username: "Administrator", Password: password,
-		})
+		ref := types.InstanceRef{Backend: "kubevirt", Context: context, Namespace: ns, Name: req.Name}
+		store.SetRef(ref, types.RegistryEntry{Backend: "kubevirt", Context: context, Namespace: ns, Username: "Administrator", Password: password})
 	}
 	return nil
 }

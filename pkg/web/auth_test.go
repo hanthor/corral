@@ -126,3 +126,30 @@ func TestCaller_NameFallsBackToLogin(t *testing.T) {
 		t.Errorf("caller() = %q,%q; want login used as name fallback", login, name)
 	}
 }
+
+func TestAuthenticationRequiredProtectsReads(t *testing.T) {
+	t.Setenv("CORRAL_AUTH_REQUIRED", "true")
+	called := false
+	gate := adminGate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/vms", nil))
+	if called || rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous read: called=%v status=%d", called, rec.Code)
+	}
+}
+
+func TestPeerServiceTokenMarksTrustedMachine(t *testing.T) {
+	t.Setenv("CORRAL_PEER_TOKEN", "secret-token")
+	t.Setenv("CORRAL_AUTH_REQUIRED", "true")
+	called := false
+	h := peerServiceAuth(adminGate(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		called = r.Header.Get("Corral-Service-Identity") == "corral-peer"
+	})))
+	r := httptest.NewRequest(http.MethodPost, "/api/vms/ns/x/start", nil)
+	r.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if !called || rec.Code != http.StatusOK {
+		t.Fatalf("service request: called=%v status=%d", called, rec.Code)
+	}
+}

@@ -1,6 +1,9 @@
 package plugin
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +11,21 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestVerifyBuildSignature(t *testing.T) {
+	pub, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("a", 64)
+	sig := ed25519.Sign(private, []byte(digest))
+	if err := verifyBuildSignature(base64.RawStdEncoding.EncodeToString(pub), digest, base64.RawStdEncoding.EncodeToString(sig)); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyBuildSignature(base64.RawStdEncoding.EncodeToString(pub), strings.Repeat("b", 64), base64.RawStdEncoding.EncodeToString(sig)); err == nil {
+		t.Fatal("accepted signature for another digest")
+	}
+}
 
 func TestDiscoveryAndResolve(t *testing.T) {
 	dir := t.TempDir()
@@ -194,11 +212,8 @@ func TestInstalled_NonExecutable(t *testing.T) {
 	// Create a non-executable file named corral-<name>
 	os.WriteFile(filepath.Join(dir, "corral-testplugin"), []byte("x"), 0644)
 	ps := Installed()
-	if len(ps) != 1 {
-		t.Fatalf("Installed() should find 1 plugin, got %d", len(ps))
-	}
-	if ps[0].Name != "testplugin" {
-		t.Errorf("plugin name = %q, want testplugin", ps[0].Name)
+	if len(ps) != 0 {
+		t.Fatalf("Installed() must ignore non-executable files, got %+v", ps)
 	}
 }
 

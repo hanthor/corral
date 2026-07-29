@@ -39,11 +39,11 @@ func handleRDPCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // rdpBridge proxies a binary websocket to the VM's RDP console. Two modes:
-// - Raw RDP (default): bridges the TCP stream directly — works with any
-//   websocket-capable RDP client or local wsproxy.
-// - RDCleanPath (?rdcleanpath=1): TLS-terminates at the proxy, sends the
-//   server cert chain to the browser, then relays the decrypted stream.
-//   This is what the IronRDP web component expects for in-browser RDP.
+//   - Raw RDP (default): bridges the TCP stream directly — works with any
+//     websocket-capable RDP client or local wsproxy.
+//   - RDCleanPath (?rdcleanpath=1): TLS-terminates at the proxy, sends the
+//     server cert chain to the browser, then relays the decrypted stream.
+//     This is what the IronRDP web component expects for in-browser RDP.
 func rdpBridge(ws *websocket.Conn) {
 	if ws.Request().URL.Query().Get("rdcleanpath") == "1" {
 		rdCleanPathBridge(ws)
@@ -55,8 +55,15 @@ func rdpBridge(ws *websocket.Conn) {
 	if ns == "" || name == "" {
 		return
 	}
+	if bridgePeerConsole(ws, "rdp") {
+		return
+	}
 
-	conn, err := consoleDialer.Dial(ns, name, kubevirt.RDP)
+	dialer := consoleDialer
+	if context := ws.Request().URL.Query().Get("context"); context != "" {
+		dialer = kubevirt.RealConsoleDialer{Context: context}
+	}
+	conn, err := dialer.Dial(ns, name, kubevirt.RDP)
 	if err != nil {
 		return
 	}

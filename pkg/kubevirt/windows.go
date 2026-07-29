@@ -174,3 +174,12 @@ func CreateWindowsVM(name, ns, iso, disk, mem string, cpu int, unattended bool) 
 	}
 	return password, nil
 }
+
+func CreateWindowsVMInContext(name, ns, iso, disk, mem string, cpu int, unattended bool, context string) (password string, err error) {
+	err = WithContext(context, func() error {
+		var inner error
+		password, inner = CreateWindowsVM(name, ns, iso, disk, mem, cpu, unattended)
+		return inner
+	})
+	return password, err
+}

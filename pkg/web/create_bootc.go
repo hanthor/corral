@@ -17,6 +17,10 @@ import (
 // completion (tests, in particular — see buildTask.wait) can do so on the
 // returned task instead of racing the goroutine through HTTP.
 func createBootc(req createRequest, ns string) (id string, task *buildTask, err error) {
+	return createBootcInContext(req, ns, "")
+}
+
+func createBootcInContext(req createRequest, ns, context string) (id string, task *buildTask, err error) {
 	if !kubevirt.BootcAvailable() {
 		return "", nil, badRequest(fmt.Errorf(
 			"bootc support is not enabled on this server (optional plugin — run the corral:bootc image)"))
@@ -40,14 +44,19 @@ func createBootc(req createRequest, ns string) (id string, task *buildTask, err 
 	done := taskBegin("bootc build", ns+"/"+req.Name)
 
 	go func() {
-		build, err := kubevirt.BootcBuildDisk(req.Name, ns, image, sshKey, req.Disk, req.StorageClass, "", req.Node, task)
-		if err == nil {
+		err := kubevirt.WithContext(context, func() error {
+			build, buildErr := kubevirt.BootcBuildDisk(req.Name, ns, image, sshKey, req.Disk, req.StorageClass, "", req.Node, task)
+			if buildErr != nil {
+				return buildErr
+			}
 			vm := kubevirt.GenerateBootcVM(req.Name, ns, build.PVCName, image, sshKey, req.Mem, req.CPU, req.Node)
-			err = kubevirt.Apply(vm)
-		}
+			return kubevirt.Apply(vm)
+		})
 		if err == nil && store != nil {
-			store.Set(req.Name, types.RegistryEntry{
+			ref := types.InstanceRef{Backend: "kubevirt", Context: context, Namespace: ns, Name: req.Name}
+			store.SetRef(ref, types.RegistryEntry{
 				Backend:   "kubevirt",
+				Context:   context,
 				Namespace: ns,
 			})
 		}
@@ -61,7 +70,7 @@ func createBootc(req createRequest, ns string) (id string, task *buildTask, err 
 		// via virtctl port-forward.
 		if err == nil {
 			dp := taskBegin("tailnet expose", ns+"/"+req.Name)
-			dp(kubevirt.ApplyProxy(req.Name, ns, kubevirt.ConsolePorts))
+			dp(kubevirt.WithContext(context, func() error { return kubevirt.ApplyProxy(req.Name, ns, kubevirt.ConsolePorts) }))
 		}
 	}()
 	return id, task, nil

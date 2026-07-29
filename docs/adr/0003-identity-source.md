@@ -1,6 +1,6 @@
 # ADR-0003: Identity source for the web UI (Tailscale headers, not OIDC)
 
-**Status:** accepted
+**Status:** accepted for Tailscale-only deployments; extended by ADR-0006
 **Date:** 2026-06-21
 
 ## Context

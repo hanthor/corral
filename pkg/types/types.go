@@ -1,5 +1,11 @@
 package types
 
+import (
+	"fmt"
+	"net/url"
+	"strings"
+)
+
 // Backend is the seam between corral's two compute backends (qemu, kubevirt):
 // the operations both genuinely implement today. It's deliberately smaller
 // than either backend's full capability set — kubevirt.Client has migrate/
@@ -21,11 +27,21 @@ type Backend interface {
 
 // VM represents a virtual machine from either backend.
 type VM struct {
+	// ID is the stable, fully-scoped identity used by APIs and selectors. Name
+	// remains the human display name and is only accepted as a selector when it
+	// resolves to exactly one instance.
+	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Backend string `json:"backend"` // "qemu", "kubevirt", or "incus"
 	Status  string `json:"status"`  // "Running", "Stopped", "Starting", "↓ 42.5%"
 	Ready   bool   `json:"ready"`
 	Running bool   `json:"running"`
+	// Context disambiguates instances with the same name across independent
+	// universes (an Incus remote or Kubernetes context).
+	Context      string               `json:"context,omitempty"`
+	Peer         string               `json:"peer,omitempty"`
+	Capabilities InstanceCapabilities `json:"capabilities"`
+	Endpoints    map[string]string    `json:"endpoints,omitempty"`
 
 	CPU  int    `json:"cpu"`
 	Mem  string `json:"mem"`
@@ -52,6 +68,101 @@ type VM struct {
 	StoppedAt string `json:"stoppedAt,omitempty"` // RFC3339; when gc stopped it (unset if user-stopped)
 }
 
+// InstanceRef identifies one instance without relying on globally unique
+// names. Context is a kubeconfig context, Incus remote, or libvirt URI.
+type InstanceRef struct {
+	Peer      string `json:"peer,omitempty"`
+	Backend   string `json:"backend"`
+	Context   string `json:"context,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+func (r InstanceRef) Validate() error {
+	if strings.TrimSpace(r.Backend) == "" || strings.TrimSpace(r.Name) == "" {
+		return fmt.Errorf("instance backend and name are required")
+	}
+	return nil
+}
+
+// String is a reversible, URL-safe selector suitable for CLI arguments and
+// API payloads: backend/context/namespace/name, optionally prefixed by peer.
+func (r InstanceRef) String() string {
+	parts := []string{r.Backend, r.Context, r.Namespace, r.Name}
+	if r.Peer != "" {
+		parts = append([]string{"peer", r.Peer}, parts...)
+	}
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
+func ParseInstanceRef(s string) (InstanceRef, error) {
+	raw := strings.Split(s, "/")
+	for i := range raw {
+		part, err := url.PathUnescape(raw[i])
+		if err != nil {
+			return InstanceRef{}, fmt.Errorf("invalid instance selector %q: %w", s, err)
+		}
+		raw[i] = part
+	}
+	var r InstanceRef
+	if len(raw) == 6 && raw[0] == "peer" {
+		r.Peer, raw = raw[1], raw[2:]
+	}
+	if len(raw) != 4 {
+		return InstanceRef{}, fmt.Errorf("invalid instance selector %q (want backend/context/namespace/name)", s)
+	}
+	r.Backend, r.Context, r.Namespace, r.Name = raw[0], raw[1], raw[2], raw[3]
+	return r, r.Validate()
+}
+
+func (v VM) Ref() InstanceRef {
+	return InstanceRef{Peer: v.Peer, Backend: v.Backend, Context: v.Context, Namespace: v.Namespace, Name: v.Name}
+}
+
+func (v *VM) SetIdentity() {
+	if v.ID == "" {
+		v.ID = v.Ref().String()
+	}
+	if v.Capabilities == (InstanceCapabilities{}) {
+		v.Capabilities = CapabilitiesForBackend(v.Backend)
+	}
+}
+
+// InstanceCapabilities prevents clients from guessing supported operations
+// from namespace strings. Remote peers may further restrict this set.
+type InstanceCapabilities struct {
+	Start     bool `json:"start"`
+	Stop      bool `json:"stop"`
+	Delete    bool `json:"delete"`
+	SSH       bool `json:"ssh"`
+	TTY       bool `json:"tty"`
+	VNC       bool `json:"vnc"`
+	RDP       bool `json:"rdp"`
+	Metrics   bool `json:"metrics"`
+	Snapshots bool `json:"snapshots"`
+	Migrate   bool `json:"migrate"`
+	Volumes   bool `json:"volumes"`
+	GPU       bool `json:"gpu"`
+}
+
+func CapabilitiesForBackend(backend string) InstanceCapabilities {
+	switch backend {
+	case "kubevirt":
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true, VNC: true, RDP: true, Metrics: true, Snapshots: true, Migrate: true, Volumes: true, GPU: true}
+	case "qemu":
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, VNC: true}
+	case "incus":
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true}
+	case "libvirt":
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true}
+	default:
+		return InstanceCapabilities{}
+	}
+}
+
 // Capabilities reports what optional operations the cluster supports, so the
 // UI can enable/disable controls instead of failing on click.
 type Capabilities struct {
@@ -63,6 +174,8 @@ type Capabilities struct {
 // RegistryEntry persists backend choice per VM.
 type RegistryEntry struct {
 	Backend   string `json:"backend"`
+	Context   string `json:"context,omitempty"`
+	Peer      string `json:"peer,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Password  string `json:"password,omitempty"`
 	Username  string `json:"username,omitempty"` // remembered from the last explicit `corral ssh -u`

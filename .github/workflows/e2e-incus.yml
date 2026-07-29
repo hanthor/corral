@@ -1,4 +1,4 @@
-name: Incus E2E Test
+name: Multi-backend E2E Test
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
   pull_request:
     paths:
       - "pkg/incus/**"
-      - "cmd/corral-incus/**"
+      - "pkg/libvirt/**"
+      - "cmd/incus.go"
       - ".github/workflows/e2e-incus.yml"
   workflow_dispatch:
 
@@ -23,20 +24,22 @@ jobs:
       - name: Install & Configure Incus
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq incus incus-client qemu-system-x86 qemu-utils
+          sudo apt-get install -y -qq incus incus-client qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst
           sudo incus admin init --minimal
           sudo usermod -aG incus-admin $USER
           sudo chmod 666 /var/lib/incus/unix.socket
+          sudo systemctl start libvirtd
+          sudo chmod 666 /run/libvirt/libvirt-sock
 
-      - name: Build Corral & Incus Plugin
+      - name: Build Corral
         run: |
           go build -o corral .
-          mkdir -p ~/.local/share/corral/plugins
-          go build -o ~/.local/share/corral/plugins/corral-incus ./cmd/corral-incus
+          ./corral context add incus-ci --backend incus --context local
+          ./corral context add libvirt-ci --backend libvirt --context qemu:///system
 
-      - name: Verify Plugin Discovery
+      - name: Verify Built-in Incus Backend
         run: |
-          ./corral plugin list | grep incus
+          ./corral incus --help
 
       - name: Run Incus LXC Container E2E Tests
         run: |
@@ -63,3 +66,32 @@ jobs:
           sleep 2
           curl -fsS http://127.0.0.1:8006/api/vms | grep incus-demo-container
           kill $WEB_PID
+
+      - name: Real triple-backend aggregate inventory (QEMU + Incus + libvirt)
+        run: |
+          qemu-img create -f qcow2 /tmp/corral-ci.qcow2 64M
+          ./corral create qemu-ci --backend qemu --qcow /tmp/corral-ci.qcow2
+          ./corral incus create incus-ci-vm --image images:ubuntu/22.04 --vm --cpu 1 --mem 1Gi
+          sudo virsh -c qemu:///system define /dev/stdin <<'XML'
+          <domain type='qemu'>
+            <name>libvirt-ci</name><memory unit='MiB'>128</memory><vcpu>1</vcpu>
+            <os><type arch='x86_64'>hvm</type></os>
+          </domain>
+          XML
+          ./corral list | tee /tmp/fleet.txt
+          grep -E '^qemu-ci[[:space:]]+qemu' /tmp/fleet.txt
+          grep -E '^incus-ci-vm[[:space:]]+incus' /tmp/fleet.txt
+          grep -E '^libvirt-ci[[:space:]]+libvirt' /tmp/fleet.txt
+
+      - name: Multi-backend web inventory
+        run: |
+          ./corral web --addr 127.0.0.1:8007 &
+          WEB_PID=$!
+          trap 'kill $WEB_PID' EXIT
+          for i in $(seq 1 20); do
+            inventory=$(curl -fsS http://127.0.0.1:8007/api/v1/inventory) && break
+            sleep 1
+          done
+          echo "$inventory" | jq -e 'any(.vms[]; .backend == "qemu")'
+          echo "$inventory" | jq -e 'any(.vms[]; .backend == "incus")'
+          echo "$inventory" | jq -e 'any(.vms[]; .backend == "libvirt")'

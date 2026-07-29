@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/shell"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -25,6 +26,19 @@ type Instance struct {
 
 var defaultRunner shell.Runner = shell.Real{}
 
+// Client operates on one Incus remote without changing the Incus CLI's
+// global active remote.
+type Client struct{ Remote string }
+
+func NewClient(remote string) Client {
+	if remote == "" {
+		remote = config.IncusRemote()
+	}
+	return Client{Remote: remote}
+}
+
+func (c Client) target(name string) string { return c.Remote + ":" + name }
+
 // SetRunner overrides the command runner for testing and demo mode.
 func SetRunner(r shell.Runner) {
 	defaultRunner = r
@@ -32,7 +46,11 @@ func SetRunner(r shell.Runner) {
 
 // ListInstances queries the local Incus daemon (via incus CLI / socket) for instances.
 func ListInstances() ([]Instance, error) {
-	out, err := defaultRunner.Run("incus", "list", "--format=json")
+	return NewClient("").ListInstances()
+}
+
+func (c Client) ListInstances() ([]Instance, error) {
+	out, err := defaultRunner.Run("incus", "list", c.Remote+":", "--format=json")
 	if err != nil {
 		return nil, fmt.Errorf("incus list failed: %w", err)
 	}
@@ -45,7 +63,11 @@ func ListInstances() ([]Instance, error) {
 
 // List converts Incus instances into Corral types.VM slice.
 func List() ([]types.VM, error) {
-	insts, err := ListInstances()
+	return NewClient("").List()
+}
+
+func (c Client) List() ([]types.VM, error) {
+	insts, err := c.ListInstances()
 	if err != nil {
 		return nil, err
 	}
@@ -58,30 +80,39 @@ func List() ([]types.VM, error) {
 		}
 		mem := inst.Config["limits.memory"]
 
-		vms = append(vms, types.VM{
-			Name:    inst.Name,
-			Backend: "incus",
-			Status:  inst.Status,
-			Ready:   running,
-			Running: running,
-			CPU:     cpu,
-			Mem:     mem,
-			Node:    inst.Location,
-		})
+		vm := types.VM{
+			Name:      inst.Name,
+			Backend:   "incus",
+			Context:   c.Remote,
+			Namespace: "incus",
+			Status:    inst.Status,
+			Ready:     running,
+			Running:   running,
+			CPU:       cpu,
+			Mem:       mem,
+			Node:      inst.Location,
+		}
+		vm.SetIdentity()
+		vms = append(vms, vm)
 	}
 	return vms, nil
 }
 
 // Exists checks if an Incus instance with the given name exists.
 func Exists(name string) bool {
-	cmd := exec.Command("incus", "info", name)
-	return cmd.Run() == nil
+	return NewClient("").Exists(name)
+}
+func (c Client) Exists(name string) bool {
+	_, err := defaultRunner.Run("incus", "info", c.target(name))
+	return err == nil
 }
 
 // Start launches an Incus instance.
 func Start(name string) error {
-	cmd := exec.Command("incus", "start", name)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	return NewClient("").Start(name)
+}
+func (c Client) Start(name string) error {
+	if out, err := defaultRunner.Run("incus", "start", c.target(name)); err != nil {
 		if strings.Contains(string(out), "already running") {
 			return nil
 		}
@@ -92,14 +123,15 @@ func Start(name string) error {
 
 // Stop shuts down an Incus instance.
 func Stop(name string) error {
-	cmd := exec.Command("incus", "stop", name)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	return NewClient("").Stop(name)
+}
+func (c Client) Stop(name string) error {
+	if out, err := defaultRunner.Run("incus", "stop", c.target(name)); err != nil {
 		if strings.Contains(string(out), "already stopped") || strings.Contains(string(out), "not running") {
 			return nil
 		}
 		// ACPI guest agent shutdown might time out on uninitialized OS VMs; fallback to forced stop.
-		forceCmd := exec.Command("incus", "stop", name, "--force")
-		if forceOut, forceErr := forceCmd.CombinedOutput(); forceErr == nil {
+		if forceOut, forceErr := defaultRunner.Run("incus", "stop", c.target(name), "--force"); forceErr == nil {
 			return nil
 		} else {
 			_ = forceOut
@@ -111,8 +143,10 @@ func Stop(name string) error {
 
 // Delete removes an Incus instance (stopping it first if forced).
 func Delete(name string) error {
-	cmd := exec.Command("incus", "delete", name, "--force")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	return NewClient("").Delete(name)
+}
+func (c Client) Delete(name string) error {
+	if out, err := defaultRunner.Run("incus", "delete", c.target(name), "--force"); err != nil {
 		return fmt.Errorf("incus delete %s: %s (%w)", name, string(out), err)
 	}
 	return nil
@@ -120,7 +154,10 @@ func Delete(name string) error {
 
 // Info gets raw JSON info for an Incus instance.
 func Info(name string) ([]byte, error) {
-	return defaultRunner.Run("incus", "info", name)
+	return NewClient("").Info(name)
+}
+func (c Client) Info(name string) ([]byte, error) {
+	return defaultRunner.Run("incus", "info", c.target(name))
 }
 
 // CreateOpts options for creating an Incus instance.
@@ -134,11 +171,14 @@ type CreateOpts struct {
 
 // Create launches a new Incus instance.
 func Create(opts CreateOpts) error {
+	return NewClient("").Create(opts)
+}
+func (c Client) Create(opts CreateOpts) error {
 	image := opts.Image
 	if image == "" {
 		image = "images:ubuntu/22.04"
 	}
-	args := []string{"launch", image, opts.Name}
+	args := []string{"launch", image, c.target(opts.Name)}
 	if opts.VM {
 		args = append(args, "--vm")
 	}
@@ -155,11 +195,57 @@ func Create(opts CreateOpts) error {
 		args = append(args, "-c", fmt.Sprintf("limits.memory=%s", mem))
 	}
 
-	cmd := exec.Command("incus", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := defaultRunner.Run("incus", args...); err != nil {
 		return fmt.Errorf("incus launch failed: %s (%w)", string(out), err)
 	}
 	return nil
+}
+
+// Remote describes an entry from `incus remote list`.
+type Remote struct {
+	Name     string `json:"name"`
+	Address  string `json:"addr"`
+	Protocol string `json:"protocol"`
+	Public   bool   `json:"public"`
+	Static   bool   `json:"static"`
+}
+
+func ListRemotes() ([]Remote, error) {
+	out, err := defaultRunner.Run("incus", "remote", "list", "--format=json")
+	if err != nil {
+		return nil, fmt.Errorf("incus remote list failed: %w", err)
+	}
+	var remotes []Remote
+	if err := json.Unmarshal(out, &remotes); err != nil {
+		return nil, fmt.Errorf("parse incus remotes: %w", err)
+	}
+	return remotes, nil
+}
+
+func ListAll() ([]types.VM, error) {
+	remotes, err := ListRemotes()
+	if err != nil {
+		return NewClient("").List()
+	}
+	var all []types.VM
+	for _, remote := range remotes {
+		if remote.Public {
+			continue
+		}
+		vms, err := NewClient(remote.Name).List()
+		if err != nil {
+			continue
+		}
+		for i := range vms {
+			if vms[i].Node == "" {
+				vms[i].Node = remote.Name
+			} else {
+				vms[i].Node = remote.Name + "/" + vms[i].Node
+			}
+		}
+		all = append(all, vms...)
+	}
+	return all, nil
 }
 
 // Backend satisfies types.Backend for Incus.
@@ -178,7 +264,10 @@ func (Backend) Viewer(name string) error {
 }
 func (Backend) Logs(name string) error { return fmt.Errorf("logs command not supported for incus") }
 func (Backend) SSH(name, username, identityFile, command string, port int, password string, localForwards []string) error {
-	args := []string{"exec", name, "--"}
+	return NewClient("").SSH(name, command)
+}
+func (c Client) SSH(name, command string) error {
+	args := []string{"exec", c.target(name), "--"}
 	if command != "" {
 		args = append(args, "sh", "-c", command)
 	} else {

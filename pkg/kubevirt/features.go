@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/tuna-os/corral/pkg/shell"
 	"github.com/tuna-os/corral/pkg/types"
 )
 
@@ -168,16 +168,19 @@ func (c *Client) vmDomain(name string) (vmDomainInfo, error) {
 // between an Intel and an AMD host, so without a same-vendor target the
 // migration would hang in Scheduling forever.
 func (c *Client) canLiveMigrate(name string) bool {
-	s, ok := vmiStatusIndex()[c.Namespace+"/"+name]
+	s, ok := vmiStatusIndexWithRunner(c.runner())[c.Namespace+"/"+name]
 	if !ok || !s.LiveMigratable {
 		return false
 	}
-	return hasMigrationTarget(s.Node, nodeVendors())
+	return hasMigrationTarget(s.Node, nodeVendorsWithRunner(c.runner()))
 }
 
 // nodeVendors maps each schedulable node to its KubeVirt CPU vendor label.
 func nodeVendors() map[string]string {
-	out, err := runPkg("kubectl", "get", "nodes", "-o", "json")
+	return nodeVendorsWithRunner(getPackageRunner())
+}
+func nodeVendorsWithRunner(r shell.Runner) map[string]string {
+	out, err := r.Run("kubectl", "get", "nodes", "-o", "json")
 	if err != nil {
 		return nil
 	}
@@ -551,13 +554,13 @@ func (c *Client) exportFormat(virtctl, name, volume, outputPath, format string) 
 	}
 	expName := name + "-export"
 	// Clear any export left over from an interrupted run so --vm can recreate it.
-	exec.Command("kubectl", "delete", "vmexport", expName, "-n", c.Namespace, "--ignore-not-found").Run()
+	shell.CommandForContext(c.Context, "kubectl", "delete", "vmexport", expName, "-n", c.Namespace, "--ignore-not-found").Run()
 	// --port-forward tunnels straight to the exporter pod (internal links); the
 	// export proxy has no external Ingress, so external links never appear.
 	args := []string{"vmexport", "download", expName,
 		"--namespace=" + c.Namespace, "--vm=" + name, "--volume=" + volume,
 		"--output=" + outputPath, "--format=" + format, "--insecure", "--port-forward"}
-	cmd := exec.Command(virtctl, args...)
+	cmd := shell.CommandForContext(c.Context, virtctl, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

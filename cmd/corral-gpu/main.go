@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
@@ -211,6 +212,9 @@ func detachGPU(vm, ns, name string) error {
 // ── CLI ───────────────────────────────────────────────────────────
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "gpu", Version: "0.1.0", Description: "KubeVirt GPU and PCI passthrough", Capabilities: []string{"cli-command", "gpu"}, Permissions: []string{"mutate KubeVirt configuration and VMs"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var namespace string
 
 	list := &cobra.Command{

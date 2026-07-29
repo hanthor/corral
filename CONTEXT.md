@@ -4,10 +4,10 @@
 
 ### VM
 
-A virtual machine managed by Corral. Lives in one of two backends: **qemu**
-(local host, systemd-managed) or **kubevirt** (on the Talos K8s cluster).
-Every VM has a unique **name** (within the registry) and is stored in
-`~/.local/share/tailvm/registry.json`.
+A virtual machine managed by Corral. It has a canonical identity composed of
+peer, backend, context, namespace, and name. Human names need only be unique
+inside their backend universe; bare-name commands are accepted only when the
+aggregated fleet resolves them unambiguously.
 
 ### vmid
 
@@ -19,7 +19,7 @@ hash of their name.
 
 ### Backend
 
-Where a VM's compute resources live. Two backends:
+Where a VM's compute resources live. Four backends:
 
 - **qemu** — local `qemu-system-x86_64` process managed via systemd user
   units. Networking via user-mode with hostfwd. Access through the host's
@@ -27,6 +27,21 @@ Where a VM's compute resources live. Two backends:
 - **kubevirt** — VM runs as a KubeVirt `VirtualMachine` resource on the
   Talos cluster. Managed via `kubectl`/`virtctl`. Access through
   `virtctl` tunnels or port-proxy Service on the tailnet.
+- **incus** — an Incus container or VM on a named Incus remote.
+- **libvirt** — a libvirt domain reached through a local or remote URI;
+  `qemu+ssh://host/system` is the remote-QEMU transport.
+
+### Context
+
+An independent backend universe: a kubeconfig context, Incus remote, or
+libvirt URI. Corral stores its own default and never changes kubectl/Incus
+global state. `--context` is a one-shot override.
+
+### Peer
+
+Another `corral web` API aggregated into the local dashboard. Direct guest
+connectivity is preferred; peer relay is the fallback. A peer keeps its
+identity on every VM so duplicate names remain distinct.
 
 ### Console
 
@@ -91,14 +106,16 @@ resource). Full design: `docs/adr/0005-containers-as-pet-pods.md`.
 
 ### Registry
 
-The file `~/.local/share/tailvm/registry.json` (mode 0600). Maps VM names
-to their backend, namespace, cloud-init password, and other metadata. The
-single source of truth for local VM state. Live probing is the fallback.
+The file `~/.local/share/tailvm/registry.json` (mode 0600). Maps canonical
+instance references to backend, context, namespace, cloud-init password, and
+other local metadata. Live backend inventory is authoritative for existence;
+the registry retains credentials and creation metadata and reads legacy
+name-keyed entries for migration compatibility.
 
 ### Plugin
 
 A krew-style extension binary (`corral-<name>`) installed via
-`corral plugin install <name>` from the marketplace. Dispatched when
+`corral marketplace install <name>` from one or more marketplaces. Dispatched when
 `corral <name>` is invoked and the subcommand isn't a built-in.
 
 ### Proxmox API compatibility layer
@@ -138,9 +155,10 @@ privilege strings are presentation-only.
 
 ### Marketplace
 
-A JSON index at `marketplace/index.json` listing available plugin binaries
-with download URLs for linux/amd64 and linux/arm64. Published by CI as
-GitHub Release assets.
+A versioned JSON index with immutable HTTPS artifacts, SHA-256 digests,
+optional Ed25519 signatures, permissions, compatibility ranges, publisher
+provenance, and supported-backend declarations. Multiple sources are merged;
+duplicate names require source-qualified selection.
 
 ## Glossary
 
@@ -148,7 +166,9 @@ GitHub Release assets.
 |---|---|
 | vm | Virtual Machine |
 | vmid | Proxmox numeric VM identifier |
-| backend | qemu or kubevirt |
+| backend | qemu, kubevirt, incus, or libvirt |
+| context | kubeconfig context, Incus remote, or libvirt URI |
+| peer | remote Corral web API aggregated into this dashboard |
 | ct | Container — a pet pod, not a VM |
 | console | VNC/RDP bridge to a VM's display |
 | registry | `~/.local/share/tailvm/registry.json` |

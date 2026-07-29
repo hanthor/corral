@@ -1,9 +1,11 @@
 # RFC-0001: VDI plugin — Windows/Linux desktop pools on Corral
 
-**Status:** Phase 1 implemented (`corral-vdi`, `pkg/vdi` — pool create/list/
-delete, assign/unassign, connect). Phases 0/2/3/4 still draft/seeking
-review. Setup guide: [docs/vdi.md](../vdi.md).
+**Status:** Phases 0 and 1 implemented. Browser RDP via IronRDP/RDCleanPath
+and the `corral-vdi` static-pool CLI are shipped. Phases 2–4 remain a
+design proposal; this RFC defines their corrected scope but does not commit
+their implementation. Setup guide: [docs/vdi.md](../vdi.md).
 **Date:** 2026-07-02
+**Updated:** 2026-07-29
 **Author:** grilled out of a live session with James Reilly + Claude
 
 ## Summary
@@ -11,9 +13,11 @@ review. Setup guide: [docs/vdi.md](../vdi.md).
 Add a `corral-vdi` plugin that turns Corral's existing VM/Container machinery
 into a small, self-hosted **Virtual Desktop Infrastructure**: pools of
 Windows or Linux desktops, assigned to users on request, reached through the
-browser, reclaimed when idle. Not a Citrix/Horizon replacement — a homelab-
-to-small-team-scale VDI that fits in one Go binary and a tailnet, the same
-scope discipline that's kept Corral itself lean.
+browser, and reclaimed by explicit release or a conservative session policy.
+Not a Citrix/Horizon replacement — a homelab-to-small-team-scale VDI that
+keeps optional broker/auth concerns in plugins and works through Tailscale or
+another private ingress, following the scope discipline that keeps Corral's
+core lean.
 
 ## Why now
 
@@ -23,11 +27,12 @@ other reasons:
 | VDI need | Already exists in Corral as |
 |---|---|
 | Remote display in the browser | noVNC bridge (`/api/vnc/{ns}/{name}`), xterm.js serial bridge |
-| RDP detection + raw transport | `GET /api/vms/{ns}/{name}/rdp` port probe, `/api/rdp/{ns}/{name}` websocket bridge (ADR-0002 phase 1) |
+| Browser RDP | IronRDP over the RDCleanPath bridge, plus RDP detection and raw websocket transport (ADR-0002 phases 1 and 2) |
 | Windows guest provisioning | `corral-windows` plugin — UEFI/TPM/virtio, driver ISO |
 | Full desktop Linux images | `corral bootc` — builds Universal Blue/Bluefin/TunaOS desktop images on-cluster from a container image |
 | Lightweight ephemeral Linux sessions | Containers (CT) — `pkg/ct`, distrobox-style persistent rootfs |
-| Tailnet-only exposure | every VM/CT gets a `tailscale.com/expose` Service already |
+| Reachability | direct-first console routing, Tailscale exposure, ingress-agnostic KubeVirt Services, and Corral-peer relay fallback |
+| Identity | trusted Tailscale identity or the optional OIDC auth-gateway plugin (ADR-0003/ADR-0006) |
 | Cluster capability gating | `corral doctor` — GPU/PCI passthrough check, StorageClass checks |
 | Replica pools of identical VMs | KubeVirt's own `VirtualMachinePool` CRD |
 
@@ -95,28 +100,32 @@ are deliberate exclusions, not oversights:
   size, and a reclaim policy. Built on KubeVirt's `VirtualMachinePool` for
   the VM-backed case; a thin equivalent for CT-backed pools (no upstream
   CRD exists for pooled pods — this is new code, small).
-- **Assignment** — a claim ticket: user identity (from the same Tailscale
-  identity source as `CORRAL_ADMINS` today, see ADR-0003) → pool member →
-  expiry. Stored the same way the registry stores VM metadata today
-  (`~/.local/share/tailvm/registry.json` pattern, or a K8s-native
-  ConfigMap/CRD if this needs to survive the CLI process — leaning CRD,
-  since assignment state needs to be visible cluster-wide, not just to
-  whichever machine ran `corral`).
+- **Assignment** — an exclusive claim from an authenticated identity to one
+  pool member. Identity can come from trusted Tailscale ingress or the OIDC
+  auth gateway; VDI consumes the resulting identity contract rather than
+  depending on either provider directly. Phase 1's labels are presentation
+  state, not a concurrency primitive. Self-service assignment must use an
+  atomic Kubernetes operation (a per-member `Lease` or resource-versioned
+  compare-and-swap) so simultaneous claims cannot receive the same desktop.
+- **Session** — the active connection associated with an Assignment. An open
+  console websocket proves only that a connection exists, not that the user
+  is actively providing keyboard or mouse input. Disconnect time, explicit
+  release, maximum session duration, and an optional guest-reported activity
+  signal are distinct inputs to reclaim policy.
 - **Connect** — one button/command that resolves a desktop's *actual*
   reachable protocol (RDP probe already exists; extend the same idea to
   "is this a VNC-only guest, RDP-capable, or a CT with just a terminal")
   and opens the right client path — today: existing noVNC/xterm.js bridges
-  plus native-RDP-via-port-forward; tomorrow: ADR-0002 phase 2's in-browser
-  IronRDP once that lands, so RDP desktops get the same one-click
-  in-browser experience VNC already has.
+  plus in-browser IronRDP. Routing is direct-first: use an advertised guest or
+  ingress endpoint when reachable, then fall back to a Corral-peer console
+  relay for complicated network topologies.
 
 ### Phased plan
 
-**Phase 0 — finish the prerequisite that's already an open ADR.**
-Ship ADR-0002 phase 2 (in-browser IronRDP via RDCleanPath) *before* phase 2
-below. A VDI product where Windows desktops require a native RDP client
-while Linux desktops are one-click-in-browser is a bad first impression —
-this is sequencing, not new scope.
+**Phase 0 — in-browser RDP prerequisite. Implemented.**
+ADR-0002 phase 2 shipped: the web UI embeds IronRDP and Corral implements the
+RDCleanPath transport it requires. Windows and RDP-enabled Linux desktops can
+therefore use the same one-click browser experience as VNC desktops.
 
 **Phase 1 — static pools, manual assignment (CLI, no broker yet). Implemented.**
 `corral vdi pool create <name> --from <golden-vm> --size N` clones an
@@ -138,21 +147,38 @@ once the target VM actually exists — `CreatePool` originally raced ahead
 and tried to label a VM that didn't exist yet on a real cluster. Fixed
 with a poll-wait (`waitForVM`, 2min timeout) between clone and label.
 
-**Phase 2 — self-serve claim + reclaim.**
-A minimal web page: authenticated user (Tailscale identity) hits "Get a
-desktop," gets assigned an available pool member (or one is powered on if
-scaled-to-zero), redirected straight into its console. Idle/logout
-detection reclaims it (power off or destroy-and-recreate, per pool policy —
-ephemeral CT pools destroy-and-recreate on every claim for a clean slate;
-persistent bootc pools just power off and keep state). This is the actual
-"VDI" moment — everything before this is infrastructure for it.
+**Phase 2 — atomic self-service claims, sessions, and reclaim. Proposed.**
+An authenticated user hits "Get a desktop," atomically claims an available
+member, powers it on if necessary, and is redirected to the best reachable
+console. Claim creation must be compare-and-swap safe; the existing
+list-then-label Phase 1 implementation is not sufficient under concurrent
+requests.
 
-**Phase 3 — GPU pools + USB redirection.**
-Wire `corral doctor`'s existing GPU/PCI passthrough check into pool
-creation (`--gpu` flag, refuses to create the pool if the doctor check
-says the cluster can't back it). Add `virtctl usbredir` support for
-smartcard/security-key redirection on Windows pools (independent of SPICE,
-confirmed still maintained).
+The first reclaim policy is deliberately conservative:
+
+1. explicit "Release desktop" is authoritative;
+2. console disconnect starts a configurable grace period;
+3. reconnect during the grace period cancels reclaim;
+4. a maximum session duration is an optional administrative ceiling; and
+5. true input-idle reclaim requires an optional guest/protocol activity
+   signal and is not inferred merely from websocket age.
+
+After reclaim, persistent pools stop the VM and retain its disks. Ephemeral
+pools destroy and recreate the member from the golden source. CT-backed pools
+remain a later sub-slice because they need their own reconciliation primitive.
+This phase is the actual VDI broker rather than another VM-management command.
+
+**Phase 3 — capacity-aware GPU pools and native USB redirection. Proposed.**
+Pool creation inspects the golden VM's host-device requests and compares the
+requested pool size with allocatable matching devices. It must distinguish
+exclusive passthrough from mediated/vGPU capacity; a generic "GPU present"
+doctor result is not enough to promise concurrent desktops.
+
+USB redirection is split by client type. A native CLI command can wrap
+`virtctl usbredir` for smartcards and security keys. Browser USB redirection
+is a separate experimental feature requiring WebUSB permission UX and a
+purpose-built bridge; it is not implied by the CLI transport and is not part
+of the initial Phase 3 commitment.
 
 **Phase 4 (exploratory, not committed) — WebRTC streaming for ephemeral
 Linux pools.** Selkies-style container images inside Corral CTs for
@@ -163,19 +189,15 @@ integration seam.
 
 ## Feasibility, honestly
 
-- **Phase 1 is low-risk** — it's assembly of existing, already-tested
+- **Phases 0 and 1 are shipped.** Phase 1 was low-risk assembly of existing
   Corral machinery (bootc, corral-windows, corral ct, KubeVirt's own
   `VirtualMachinePool`), not new hard problems.
-- **Phase 2's hard part is reclaim/idle-detection**, not claim/assignment.
-  noVNC/RDP give Corral no "user went idle" signal for free. Cheapest
-  honest starting point: track websocket-bridge connection open/close as
-  an activity proxy (imperfect, needs zero guest cooperation) rather than
-  a bare session TTL (kicks people mid-session) or an in-guest agent (real
-  extra engineering, per-OS).
-- **Phase 0 (in-browser RDP) has been "planned, not implemented" since
-  ADR-0002** — ship it before layering VDI-specific work on top, and treat
-  its still-unstarted status as a real signal about effort, not a
-  formality to wave through.
+- **Phase 2 claim selection is straightforward, but concurrency is not
+  optional.** A Lease or compare-and-swap claim must precede VM startup.
+- **Phase 2's genuinely hard part is input-idle detection.** Websocket
+  open/close is useful session-presence data, but it is not user activity.
+  Start with explicit release plus disconnect grace; add guest cooperation
+  only when the operational value justifies per-OS integration.
 - **Phase 3's GPU story is constrained by AMD's current driver/firmware
   support, not by KubeVirt.** Verified directly against AMD's GIM/SR-IOV
   driver release notes (2026-07): officially supported hardware is
@@ -194,19 +216,18 @@ integration seam.
 
 ## Open questions (for the grilling session)
 
-1. **Assignment storage**: CRD vs. ConfigMap vs. reusing the registry
-   pattern — needs to be visible/queryable cluster-wide (web UI, any CLI
-   invocation, any node), which argues CRD, but that's a bigger commitment
-   (new API type, controller-ish reconciliation) than Corral has taken on
-   before. Worth a dedicated grilling pass.
+1. **Claim primitive**: use a standard Kubernetes `Lease` per member, or a
+   purpose-built Assignment CRD? A Lease gives atomic acquisition and expiry
+   without introducing a new API, while a CRD gives clearer domain state and
+   validation. A local registry or unguarded ConfigMap is ruled out because
+   claims must be cluster-visible and concurrency-safe.
 2. **CT-backed pool primitive**: KubeVirt gives us `VirtualMachinePool` for
    free; nothing upstream gives us a pooled-pod equivalent. Build our own
    (small — a label-based reconcile loop) or is this premature for CT pools
    specifically vs. starting VM-only?
-3. **Reclaim triggers**: idle timeout (needs an in-guest or protocol-level
-   "last activity" signal — noVNC/RDP don't hand this to Corral for free)
-   vs. explicit logout vs. session TTL. Each has different guest-side
-   requirements.
+3. **Reclaim defaults**: choose disconnect grace, maximum session duration,
+   and whether an administrator may force-release a connected session. Input
+   idle remains unavailable without guest/protocol cooperation.
 4. **Licensing UX**: does Corral just document the Windows licensing
    constraint (current lean) or actively refuse to create pools above some
    size without an explicit `--i-have-licenses` flag?
@@ -215,6 +236,10 @@ integration seam.
    as leaned toward above. Revisit if/when Phase 2's broker becomes a
    genuinely separate long-running process (unlike Phase 1's one-shot CLI
    commands) — that's a real reason to split, not just default caution.
+6. **Broker placement**: keep Phase 2's long-running broker inside
+   `corral-vdi`, or expose VDI routes through a peer/gateway protocol? It must
+   preserve the lean core and work with both Tailscale and ingress-agnostic
+   deployments.
 
 ## Sources
 

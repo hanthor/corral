@@ -9,23 +9,32 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
 // Check is one diagnostic result.
 type Check struct {
-	Name    string `json:"name"`
-	OK      bool   `json:"ok"`
-	Detail  string `json:"detail"`
-	Fixable bool   `json:"fixable"` // Corral can reconcile it (config-only, safe)
-	fix     func() error
+	Name     string `json:"name"`
+	OK       bool   `json:"ok"`
+	Detail   string `json:"detail"`
+	Backend  string `json:"backend,omitempty"`
+	Context  string `json:"context,omitempty"`
+	Severity string `json:"severity,omitempty"` // required, warning, or info
+	Fixable  bool   `json:"fixable"`            // Corral can reconcile it (config-only, safe)
+	fix      func() error
 }
 
 var runner shell.Runner = shell.DefaultKubectl
+var runnerMu sync.Mutex
 
 // SetRunner overrides the command runner (for unit tests).
-func SetRunner(r shell.Runner) { runner = r }
+func SetRunner(r shell.Runner) {
+	runnerMu.Lock()
+	defer runnerMu.Unlock()
+	runner = r
+}
 
 func run(name string, args ...string) ([]byte, error) {
 	return runner.Run(name, args...)
@@ -50,6 +59,12 @@ func okList(args ...string) bool {
 // checks collapse into one explanatory row instead of a wall of failures,
 // and the local checks still run.
 func Run() []Check {
+	runnerMu.Lock()
+	defer runnerMu.Unlock()
+	return runUnlocked()
+}
+
+func runUnlocked() []Check {
 	local := localChecks()
 	if !ok("kubectl", "get", "--raw", "/livez", "--request-timeout=3s") {
 		return append([]Check{{

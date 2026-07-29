@@ -2,6 +2,20 @@
 
 Welcome to the comprehensive user guide for **Corral** — the unified management platform for virtual machines, pet-pod containers, and local hypervisors.
 
+## Backends, contexts, and peers
+
+`corral config set-default-backend incus` makes unqualified creates use
+Incus. `corral context list|set|get` switches Corral's context without
+mutating kubectl or the Incus CLI; `--context` is a one-shot override.
+
+Libvirt URIs make remote QEMU a normal backend, for example:
+`corral context set qemu+ssh://hypervisor/system`.
+
+A local dashboard can aggregate an in-cluster Corral without a local
+kubeconfig: `corral peer add homelab https://corral.example.ts.net`.
+Console routing tries the VM's advertised direct address first and relays
+through the peer only when direct access is unavailable.
+
 ---
 
 ## 1. Overview & Architecture
@@ -93,21 +107,23 @@ accent).
 
 Launch the interactive Bubble Tea TUI by running `corral` with no arguments (or explore in demo mode with `corral --demo`).
 
-```
-┌─ Corral Datacenter ────────────────────────────────────────────────────────┐
-│  NAME            BACKEND    STATUS      PORTS  SPECS          NODE         │
-│● web-prod        kubevirt   Running     ●      2 CPU / 4Gi    corral-1     │
-│● db-prod         kubevirt   Running     ●      4 CPU / 8Gi    corral-2     │
-│● laptop-dev      qemu       Running     ○      2 CPU / 4G     localhost    │
-│● test-ct         incus      Running     ○      2 CPU / 2Gi    localhost    │
-└────────────────────────────────────────────────────────────────────────────┘
-  [enter] actions  [d] doctor  [q] quit
-```
+The left side is a unified, searchable fleet. Wide terminals add a details
+pane with canonical ID, backend/context, placement, address, resources, and
+available operations. Failed remotes appear as partial-fleet warnings without
+hiding healthy instances.
 
-#### TUI Keyboard Shortcuts & Features:
-- **`[Enter]` Actions Menu**: Opens contextual action menu (Start, Stop, Restart, Pause, Migrate, SSH, VNC Viewer, Delete).
-- **`[d]` Doctor View**: Runs full cluster & host diagnostic checks inline within the terminal.
-- **Incus & Pet-Pod Integration**: Displays all compute instances (KubeVirt VMs, QEMU local VMs, Pet-Pod CTs, and Incus instances) in a unified Bubble Tea list.
+#### TUI keyboard shortcuts and features
+
+- `/` fuzzy-searches names, canonical IDs, backends, contexts, nodes, and IPs.
+- `Tab`, `[` and `]` cycle between the complete fleet and named contexts.
+- `Enter` opens a capability-aware action menu; unsupported operations are
+  absent rather than failing after selection.
+- `s` and `x` quickly start or stop the selected VM; `r` refreshes every
+  backend.
+- `d` runs scoped QEMU, KubeVirt, Incus, and libvirt diagnostics.
+- `?` opens the in-app command deck.
+- QEMU, KubeVirt, Incus, libvirt, and pet-pod CTs share the inventory without
+  losing their backend-specific capabilities.
 
 ---
 
@@ -210,6 +226,11 @@ Run `corral doctor` to diagnose cluster capabilities, hypervisor support, and st
 ```bash
 corral doctor
 ```
+
+In a multi-context setup it diagnoses every configured QEMU, KubeVirt, Incus,
+and libvirt target. Use `corral doctor --context NAME` for one target. The
+complete capability matrix and direct-versus-relayed networking behavior are
+documented in [backend-support.md](backend-support.md).
 
 ```
 ✓ KubeVirt installed (v1.8.2)

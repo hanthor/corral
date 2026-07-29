@@ -12,7 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/catalog"
+	"github.com/tuna-os/corral/pkg/config"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/libvirt"
 	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
@@ -271,14 +274,38 @@ Boot a container image as a VM? Install the bootc extension:
 			return maybeStartAndWait(name)
 		}
 
-		if createIncus {
-			if !plugin.IsInstalled("incus") {
-				return fmt.Errorf("incus plugin is not installed — run `corral plugin install incus`")
+		backend := config.DefaultBackend()
+		if rootBackend != "" {
+			backend = rootBackend
+		} else if rootContext != "" {
+			if target, ok := config.FindContext(rootContext); ok {
+				backend = target.Backend
 			}
-			return plugin.Dispatch("incus", append([]string{"create", name}, os.Args[3:]...))
+		}
+		if createIncus {
+			backend = "incus"
+		}
+		if createKubevirt {
+			backend = "kubevirt"
+		}
+		// KubeVirt-only source flags remain an explicit signal for backwards compatibility.
+		if backend == "qemu" && !createIncus && (createImage != "" || createImport != "" || createContainerDisk != "" || createPVC != "") {
+			backend = "kubevirt"
+		}
+		if backend == "incus" {
+			return runIncusCreate(name)
+		}
+		if backend == "libvirt" {
+			if err := libvirt.NewClient("").Create(types.CreateOpts{Name: name, CPU: createCPU, Mem: createMem, Disk: createDisk, ISO: createISO, QCOW: createQCOW}); err != nil {
+				return err
+			}
+			if registryStore != nil {
+				return registryStore.Set(name, types.RegistryEntry{Backend: "libvirt"})
+			}
+			return nil
 		}
 
-		if createKubevirt || createImage != "" || createImport != "" {
+		if backend == "kubevirt" {
 			return runKubevirtCreate(name)
 		}
 		if err := runQemuCreate(name); err != nil {
@@ -291,7 +318,7 @@ Boot a container image as a VM? Install the bootc extension:
 func init() {
 	rootCmd.AddCommand(createCmd)
 	createCmd.Flags().BoolVarP(&createKubevirt, "kubevirt", "k", false, "Use KubeVirt backend")
-	createCmd.Flags().BoolVar(&createIncus, "incus", false, "Use Incus backend plugin")
+	createCmd.Flags().BoolVar(&createIncus, "incus", false, "Use Incus backend")
 	createCmd.Flags().StringVar(&createFirmware, "firmware", "", "Firmware boot type: uefi (default) or bios")
 	createCmd.Flags().StringVar(&createMem, "mem", "4G", "Memory allocation")
 	createCmd.Flags().IntVar(&createCPU, "cpu", 2, "CPU cores")
@@ -322,6 +349,23 @@ func init() {
 	createCmd.Flags().StringVar(&createNetworkNAD, "network-nad", "", "[kubevirt] NetworkAttachmentDefinition to bridge onto (\"ns/name\"); implies --lan")
 	createCmd.Flags().StringVar(&createBridgeIface, "bridge-iface", "", "[kubevirt] Guest interface name for the LAN bridge (default: net1)")
 	createCmd.Flags().BoolVar(&createLANService, "lan-service", false, "[kubevirt] Expose via a LoadBalancer Service instead of a secondary NIC (no Multus needed — works with Cilium L2/BGP or MetalLB)")
+}
+
+func runIncusCreate(name string) error {
+	if createISO != "" || createQCOW != "" || createImport != "" || createPVC != "" || createContainerDisk != "" {
+		return fmt.Errorf("the Incus backend creates from an Incus image; use --image (for example images:ubuntu/24.04)")
+	}
+	image := createImage
+	if image == "" {
+		image = "images:ubuntu/24.04"
+	}
+	if err := incus.Create(incus.CreateOpts{Name: name, Image: image, VM: true, CPU: createCPU, Memory: createMem}); err != nil {
+		return err
+	}
+	if registryStore != nil {
+		return registryStore.Set(name, types.RegistryEntry{Backend: "incus"})
+	}
+	return nil
 }
 
 func runKubevirtCreate(name string) error {

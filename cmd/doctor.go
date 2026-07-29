@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/doctor"
 )
 
@@ -31,12 +33,32 @@ misconfigured. --fix reconciles the safe, config-only issues.`,
 			}
 		}
 
-		checks := doctor.Run()
+		contexts := config.Contexts()
+		if rootContext != "" {
+			if selected, ok := config.FindContext(rootContext); ok {
+				contexts = []config.ContextConfig{selected}
+			} else {
+				contexts = []config.ContextConfig{{Name: rootContext, Backend: rootBackend, Context: rootContext}}
+			}
+		}
+		checks := doctor.RunContexts(contexts)
 		anyFixable := false
+		failedRequired := false
+		lastTarget := ""
 		for _, c := range checks {
+			target := c.Context + " [" + c.Backend + "]"
+			if target != lastTarget {
+				fmt.Printf("\n%s\n", target)
+				lastTarget = target
+			}
 			mark := "\033[32m✓\033[0m"
 			if !c.OK {
-				mark = "\033[31m✗\033[0m"
+				if c.Severity == "warning" {
+					mark = "\033[33m!\033[0m"
+				} else {
+					mark = "\033[31m✗\033[0m"
+					failedRequired = true
+				}
 			}
 			suffix := ""
 			if !c.OK && c.Fixable {
@@ -48,8 +70,18 @@ misconfigured. --fix reconciles the safe, config-only issues.`,
 		if anyFixable && !doctorFix {
 			fmt.Println("\nReconcile the fixable items: corral doctor --fix")
 		}
+		if failedRequired {
+			return fmt.Errorf("one or more required backend checks failed%s", selectedDoctorHint())
+		}
 		return nil
 	},
+}
+
+func selectedDoctorHint() string {
+	if rootContext == "" {
+		return " (use --context NAME to inspect one target)"
+	}
+	return " for " + strings.TrimSpace(rootContext)
 }
 
 func init() {

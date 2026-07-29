@@ -1,11 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
+	"github.com/tuna-os/corral/pkg/fleet"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/libvirt"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -30,6 +36,12 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if p, ok, err := resolvePeerTarget(name); ok {
+			if err != nil {
+				return err
+			}
+			return p.action("POST", "start")
+		}
 		backend, err := requireBackend(name)
 		if err != nil {
 			return err
@@ -37,6 +49,12 @@ var startCmd = &cobra.Command{
 		if backend == "kubevirt" {
 			ns, _ := resolveNamespace(name)
 			return kubevirt.NewClient(ns).StartVM(name)
+		}
+		if backend == "incus" {
+			return incus.Start(name)
+		}
+		if backend == "libvirt" {
+			return libvirt.NewClient("").Start(name)
 		}
 		return qemu.Start(name)
 	},
@@ -52,6 +70,12 @@ var stopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if p, ok, err := resolvePeerTarget(name); ok {
+			if err != nil {
+				return err
+			}
+			return p.action("POST", "stop")
+		}
 		backend, err := requireBackend(name)
 		if err != nil {
 			return err
@@ -59,6 +83,12 @@ var stopCmd = &cobra.Command{
 		if backend == "kubevirt" {
 			ns, _ := resolveNamespace(name)
 			return kubevirt.NewClient(ns).StopVM(name)
+		}
+		if backend == "incus" {
+			return incus.Stop(name)
+		}
+		if backend == "libvirt" {
+			return libvirt.NewClient("").Stop(name)
 		}
 		return qemu.Stop(name)
 	},
@@ -75,9 +105,16 @@ var deleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		backend, err := requireBackend(name)
-		if err != nil {
-			return err
+		p, peer, peerErr := resolvePeerTarget(name)
+		if peerErr != nil {
+			return peerErr
+		}
+		backend := ""
+		if !peer {
+			backend, err = requireBackend(name)
+			if err != nil {
+				return err
+			}
 		}
 		if !forceDelete {
 			fmt.Fprintf(os.Stderr, "Delete VM %q and its disks? [y/N] ", name)
@@ -87,9 +124,20 @@ var deleteCmd = &cobra.Command{
 				return fmt.Errorf("aborted")
 			}
 		}
+		if peer {
+			return p.action("DELETE", "")
+		}
 		if backend == "kubevirt" {
 			ns, _ := resolveNamespace(name)
 			if err := kubevirt.NewClient(ns).DeleteVM(name); err != nil {
+				return err
+			}
+		} else if backend == "incus" {
+			if err := incus.Delete(name); err != nil {
+				return err
+			}
+		} else if backend == "libvirt" {
+			if err := libvirt.NewClient("").Delete(name); err != nil {
 				return err
 			}
 		} else if err := qemu.Delete(name); err != nil {
@@ -112,6 +160,12 @@ var infoCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if p, ok, err := resolvePeerTarget(name); ok {
+			if err != nil {
+				return err
+			}
+			return p.action("GET", "")
+		}
 		backend, err := requireBackend(name)
 		if err != nil {
 			return err
@@ -119,6 +173,22 @@ var infoCmd = &cobra.Command{
 		if backend == "kubevirt" {
 			ns, _ := resolveNamespace(name)
 			data, err := kubevirt.NewClient(ns).VMInfo(name)
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(data))
+			return nil
+		}
+		if backend == "incus" {
+			data, err := incus.Info(name)
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(data))
+			return nil
+		}
+		if backend == "libvirt" {
+			data, err := libvirt.NewClient("").Info(name)
 			if err != nil {
 				return err
 			}
@@ -220,6 +290,19 @@ something the VM has listening on its own port 80.`,
 		if err != nil {
 			return err
 		}
+		if p, ok, err := resolvePeerTarget(name); ok {
+			if err != nil {
+				return err
+			}
+			user := sshUser
+			if user == "" {
+				user = os.Getenv("USER")
+			}
+			if user == "" {
+				user = "root"
+			}
+			return p.ssh(user, sshCommand)
+		}
 		backend, err := requireBackend(name)
 		if err != nil {
 			return err
@@ -230,6 +313,12 @@ something the VM has listening on its own port 80.`,
 		if backend == "kubevirt" {
 			ns, _ := resolveNamespace(name)
 			return kubevirt.NewClient(ns).SSH(name, user, sshIdentity, sshCommand, sshPort, password, sshLocalForwards)
+		}
+		if backend == "incus" {
+			return incus.NewClient("").SSH(name, sshCommand)
+		}
+		if backend == "libvirt" {
+			return libvirt.NewClient("").SSH(name, sshCommand)
 		}
 		return qemu.SSH(name, user, sshIdentity, sshCommand, sshPort, password, sshLocalForwards)
 	},
@@ -277,7 +366,26 @@ func init() {
 
 func requireOrPrompt(args []string, action string) (string, error) {
 	if len(args) == 1 && args[0] != "" {
-		return args[0], nil
+		for _, peer := range config.Peers() {
+			if strings.HasPrefix(args[0], peer.Name+"/") {
+				return args[0], nil
+			}
+		}
+		vm, err := resolveVM(args[0])
+		if err != nil {
+			if registryStore != nil {
+				if entry, ok := registryStore.Get(args[0]); ok {
+					fallback := types.VM{Name: args[0], Backend: entry.Backend, Context: entry.Context, Namespace: entry.Namespace}
+					selectedVM = &fallback
+					activateVMContext(fallback)
+					return args[0], nil
+				}
+			}
+			return "", err
+		}
+		selectedVM = &vm
+		activateVMContext(vm)
+		return vm.Name, nil
 	}
 	names := allVMNames()
 	if len(names) == 0 {
@@ -291,22 +399,31 @@ func requireOrPrompt(args []string, action string) (string, error) {
 }
 
 func allVMNames() []string {
-	var names []string
-	client := kubevirt.NewClient("")
-	vms, err := client.ListVMs()
-	if err == nil {
-		for _, vm := range vms {
-			names = append(names, vm.Name)
-		}
+	result := fleet.List(context.Background())
+	counts := map[string]int{}
+	for _, vm := range result.VMs {
+		counts[vm.Name]++
 	}
-	qemuVMs, _ := qemu.List()
-	for _, vm := range qemuVMs {
-		names = append(names, vm.Name)
+	var names []string
+	for _, vm := range result.VMs {
+		if counts[vm.Name] == 1 {
+			names = append(names, vm.Name)
+		} else {
+			names = append(names, vm.ID)
+		}
 	}
 	return uniq(names)
 }
 
 func resolveNamespace(name string) (string, string) {
+	if selectedVM != nil && selectedVM.Name == name {
+		activateVMContext(*selectedVM)
+		return selectedVM.Namespace, selectedVM.Backend
+	}
+	if vm, err := resolveVM(name); err == nil {
+		activateVMContext(vm)
+		return vm.Namespace, vm.Backend
+	}
 	if registryStore != nil {
 		if entry, ok := registryStore.Get(name); ok && entry.Namespace != "" {
 			return entry.Namespace, entry.Backend

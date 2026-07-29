@@ -40,6 +40,7 @@ func localVMs() []types.VM {
 	for i := range vms {
 		vms[i].Namespace = localNS
 		vms[i].Node = "local"
+		vms[i].SetIdentity()
 	}
 	return vms
 }

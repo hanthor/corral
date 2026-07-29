@@ -42,6 +42,41 @@ func (Real) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
+type contextRunner struct {
+	next    Runner
+	context string
+}
+
+// WithKubeContext returns a runner permanently bound to one kubeconfig
+// context. Unlike an environment variable, this is safe when the web server
+// queries several clusters concurrently.
+func WithKubeContext(r Runner, context string) Runner {
+	if context == "" {
+		return r
+	}
+	return &contextRunner{next: r, context: context}
+}
+
+func (r *contextRunner) args(name string, args []string) []string {
+	base := filepath.Base(name)
+	if base != "kubectl" && base != "virtctl" {
+		return args
+	}
+	for _, arg := range args {
+		if arg == "--context" || strings.HasPrefix(arg, "--context=") {
+			return args
+		}
+	}
+	return append([]string{"--context=" + r.context}, args...)
+}
+func (r *contextRunner) Run(name string, args ...string) ([]byte, error) {
+	return r.next.Run(name, r.args(name, args)...)
+}
+func (r *contextRunner) RunStdin(stdin, name string, args ...string) ([]byte, error) {
+	return r.next.RunStdin(stdin, name, r.args(name, args)...)
+}
+func (r *contextRunner) LookPath(name string) (string, error) { return r.next.LookPath(name) }
+
 // Call records a single command invocation for test assertions.
 type Call struct {
 	Name  string
@@ -197,6 +232,32 @@ func WithKubectlTimeout(r Runner, timeout string) Runner {
 // slow control plane).
 var DefaultKubectl Runner = WithKubectlTimeout(Real{}, kubectlTimeoutDefault())
 
+// Command returns a streaming command with Corral's selected Kubernetes
+// context injected. Long-lived operations (console, exec, logs -f) cannot use
+// Runner because they need direct stdin/stdout access, but they must still
+// obey the same context contract as ordinary kubectl calls.
+func Command(name string, args ...string) *exec.Cmd {
+	if base := filepath.Base(name); base == "kubectl" || base == "virtctl" {
+		args = injectKubectlContext(args)
+	}
+	return exec.Command(name, args...)
+}
+
+func CommandForContext(context, name string, args ...string) *exec.Cmd {
+	if context != "" {
+		has := false
+		for _, arg := range args {
+			if arg == "--context" || strings.HasPrefix(arg, "--context=") {
+				has = true
+			}
+		}
+		if !has && (filepath.Base(name) == "kubectl" || filepath.Base(name) == "virtctl") {
+			args = append([]string{"--context=" + context}, args...)
+		}
+	}
+	return exec.Command(name, args...)
+}
+
 func kubectlTimeoutDefault() string {
 	if v := os.Getenv("CORRAL_KUBECTL_TIMEOUT"); v != "" {
 		if _, err := time.ParseDuration(v); err == nil {
@@ -220,12 +281,28 @@ type kubectlTimeoutRunner struct {
 }
 
 func (k *kubectlTimeoutRunner) inject(name string, args []string) []string {
+	args = injectKubectlContext(args)
 	for _, a := range args {
 		if strings.HasPrefix(a, "--request-timeout") {
 			return args
 		}
 	}
 	return append([]string{"--request-timeout=" + k.timeout}, args...)
+}
+
+func injectKubectlContext(args []string) []string {
+	if context := os.Getenv("CORRAL_KUBE_CONTEXT"); context != "" {
+		hasContext := false
+		for _, a := range args {
+			if a == "--context" || strings.HasPrefix(a, "--context=") {
+				hasContext = true
+			}
+		}
+		if !hasContext {
+			args = append([]string{"--context=" + context}, args...)
+		}
+	}
+	return args
 }
 
 // call wraps one kubectl execution with the breaker bookkeeping.
@@ -311,7 +388,7 @@ func (k *kubectlTimeoutRunner) Run(name string, args ...string) ([]byte, error) 
 		return k.next.Run(name, args...)
 	}
 	if !readOnlyVerb(args) {
-		return k.breakerOnly(func() ([]byte, error) { return k.next.Run(name, args...) })
+		return k.breakerOnly(func() ([]byte, error) { return k.next.Run(name, injectKubectlContext(args)...) })
 	}
 	if _, isReal := k.next.(Real); isReal {
 		// --request-timeout caps each HTTP request, but kubectl's discovery
@@ -328,7 +405,7 @@ func (k *kubectlTimeoutRunner) RunStdin(stdin string, name string, args ...strin
 		return k.next.RunStdin(stdin, name, args...)
 	}
 	if !readOnlyVerb(args) {
-		return k.breakerOnly(func() ([]byte, error) { return k.next.RunStdin(stdin, name, args...) })
+		return k.breakerOnly(func() ([]byte, error) { return k.next.RunStdin(stdin, name, injectKubectlContext(args)...) })
 	}
 	if _, isReal := k.next.(Real); isReal {
 		return k.call(func() ([]byte, error) { return k.hardRun(stdin, name, k.inject(name, args)) })

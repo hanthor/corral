@@ -103,10 +103,9 @@
   <form id="create-form" hidden>
     <h2>Create virtual machine</h2>
     <label>Name <input name="name" required pattern="[a-z0-9][a-z0-9-]*" placeholder="myvm"></label>
-    <label id="target-field" hidden>Create on
+    <label id="target-field">Create on
       <select name="target">
-        <option value="" selected>Cluster (KubeVirt)</option>
-        <option value="local">This host (local QEMU/KVM)</option>
+        <option value="" selected>Default context</option>
       </select>
     </label>
     <label>Boot source

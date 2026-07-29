@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -17,6 +19,9 @@ import (
 // Tailscale ingress headers. Both are empty when the request didn't arrive
 // through the identity-proving proxy (e.g. local port-forward).
 func caller(r *http.Request) (login, name string) {
+	if service := strings.TrimSpace(r.Header.Get("Corral-Service-Identity")); service != "" {
+		return service, service
+	}
 	login = strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
 	name = strings.TrimSpace(r.Header.Get("Tailscale-User-Name"))
 	if name == "" {
@@ -45,14 +50,38 @@ func adminLogins() map[string]bool {
 // UI is single-user and every caller is an admin (back-compat default).
 func authEnforced() bool { return len(adminLogins()) > 0 }
 
+func authenticationRequired() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("CORRAL_AUTH_REQUIRED")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
 // isAdmin reports whether the caller may perform mutating actions.
 func isAdmin(r *http.Request) bool {
+	if r.Header.Get("Corral-Service-Identity") != "" {
+		return true
+	}
 	admins := adminLogins()
 	if len(admins) == 0 {
 		return true // no allowlist → open / single-user
 	}
 	login, _ := caller(r)
-	return login != "" && admins[strings.ToLower(login)]
+	email := strings.ToLower(strings.TrimSpace(r.Header.Get("Tailscale-User-Email")))
+	return login != "" && (admins[strings.ToLower(login)] || (email != "" && admins[email]))
+}
+
+// peerServiceAuth validates the optional machine credential used by another
+// Corral instance. It marks only constant-time verified requests as trusted;
+// client-supplied service identity headers are always removed first.
+func peerServiceAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("Corral-Service-Identity")
+		expected := strings.TrimSpace(os.Getenv("CORRAL_PEER_TOKEN"))
+		provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if expected != "" && len(provided) == len(expected) && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1 {
+			r.Header.Set("Corral-Service-Identity", "corral-peer")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // adminGate wraps the router: safe (GET/HEAD/OPTIONS) requests always pass;
@@ -60,13 +89,17 @@ func isAdmin(r *http.Request) bool {
 // hides controls, but the server is the real boundary.
 func adminGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		login, _ := caller(r)
+		if authenticationRequired() && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/whoami" && login == "" {
+			errResp(w, http.StatusUnauthorized, fmt.Errorf("authentication required"))
+			return
+		}
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 			next.ServeHTTP(w, r)
 			return
 		}
 		if !isAdmin(r) {
-			login, _ := caller(r)
 			who := login
 			if who == "" {
 				who = "an unauthenticated caller"

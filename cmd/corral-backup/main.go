@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/cronops"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
@@ -32,6 +33,9 @@ var (
 )
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "backup", Version: "0.2.0", Description: "KubeVirt disk backup and restore", Capabilities: []string{"cli-command", "backup"}, Permissions: []string{"execute kubectl and rclone", "read VM disks", "write object storage"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

@@ -1,20 +1,25 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
+	"github.com/tuna-os/corral/pkg/fleet"
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/libvirt"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -42,7 +47,9 @@ type vmItem struct {
 
 func (i vmItem) Title() string       { return i.vm.Name }
 func (i vmItem) Description() string { return i.display }
-func (i vmItem) FilterValue() string { return i.vm.Name }
+func (i vmItem) FilterValue() string {
+	return strings.Join([]string{i.vm.Name, i.vm.ID, i.vm.Backend, i.vm.Context, i.vm.Namespace, i.vm.Node, i.vm.IP}, " ")
+}
 
 func vmToItem(vm types.VM) vmItem {
 	proxy := tuiProxyOff
@@ -136,9 +143,18 @@ func actionApplies(id string, vm types.VM) bool {
 	case "unpause":
 		return paused
 	case "migrate":
-		return vm.Backend == "kubevirt" && vm.Running && !paused
+		return vm.Capabilities.Migrate && vm.Running && !paused
+	case "snapshot":
+		return vm.Capabilities.Snapshots
+	case "hardware", "ports", "clone", "export":
+		return vm.Backend == "kubevirt"
 	case "ssh", "viewer":
-		return vm.Running && !paused
+		if id == "ssh" {
+			return vm.Capabilities.SSH && vm.Running && !paused
+		}
+		return vm.Capabilities.VNC && vm.Running && !paused
+	case "delete":
+		return vm.Capabilities.Delete
 	default:
 		return true
 	}
@@ -183,39 +199,31 @@ type tuiModel struct {
 	cloneErr    string
 	width       int
 	height      int
+	allItems    []list.Item
+	contextName string
+	contextPos  int
+	errors      map[string]string
+	refreshedAt time.Time
+	notice      string
+	showHelp    bool
 }
 
 func newTUIModel() tuiModel {
-	items := []list.Item{}
-	vms, _ := kubevirt.NewClient("").ListVMs()
-	for _, vm := range vms {
-		items = append(items, vmToItem(vm))
-	}
-	qVMs, _ := qemu.List()
-	for _, vm := range qVMs {
-		items = append(items, vmToItem(vm))
-	}
-	iVMs, _ := incus.List()
-	for _, vm := range iVMs {
-		items = append(items, vmToItem(vm))
-	}
+	items, errs := loadTUIItems()
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
 		items = append(items, ctToItem(c))
 	}
 
-	if len(items) == 0 {
-		fmt.Println("No VMs or CTs found. Create one: corral create <name>")
-		os.Exit(0)
-	}
-
 	l := list.New(items, vmItemDelegate{}, 0, 0)
+	l.SetSize(80, 36)
 	l.Title = tuiListTitle(items)
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowHelp(false)
 	l.Styles.Title = tuiTitle
 
-	m := tuiModel{list: l, state: "list"}
+	m := tuiModel{list: l, state: "list", allItems: items, errors: errs, refreshedAt: time.Now(), width: 80, height: 40}
 	m.actionsList = m.newActionsList()
 	return m
 }
@@ -272,11 +280,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(msg.Width, msg.Height-2)
+		listWidth := msg.Width
+		if msg.Width >= 100 {
+			listWidth = msg.Width * 2 / 3
+		}
+		m.list.SetSize(listWidth, msg.Height-3)
 		m.actionsList.SetSize(msg.Width, msg.Height-2)
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
 		if m.state == "edit" {
 			em, cmd := m.edit.Update(msg)
 			m.edit = em.(editModel)
@@ -395,7 +411,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "f":
 				doctor.Fix()
-				m.doctorRows = doctor.Run()
+				m.doctorRows = doctor.RunContexts(config.Contexts())
 			case "esc", "q", "enter":
 				m.state = "list"
 			case "ctrl+c":
@@ -411,8 +427,35 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "d":
-			m.doctorRows = doctor.Run()
+			m.doctorRows = doctor.RunContexts(config.Contexts())
 			m.state = "doctor"
+			return m, nil
+		case "?":
+			m.showHelp = true
+			return m, nil
+		case "r":
+			m.refreshList()
+			m.notice = "Fleet refreshed"
+			return m, nil
+		case "tab", "]":
+			m.cycleContext(1)
+			return m, nil
+		case "shift+tab", "[":
+			m.cycleContext(-1)
+			return m, nil
+		case "s":
+			if item, ok := m.list.SelectedItem().(vmItem); ok && actionApplies("start", item.vm) {
+				m.selected, m.isCT = item.vm, false
+				m.performAction("start")
+				m.refreshList()
+			}
+			return m, nil
+		case "x":
+			if item, ok := m.list.SelectedItem().(vmItem); ok && actionApplies("stop", item.vm) {
+				m.selected, m.isCT = item.vm, false
+				m.performAction("stop")
+				m.refreshList()
+			}
 			return m, nil
 		case "enter":
 			switch item := m.list.SelectedItem().(type) {
@@ -447,6 +490,7 @@ func (m *tuiModel) performAction(action string) {
 	}
 	name := m.selected.Name
 	backend := m.selected.Backend
+	contextName := m.selected.Context
 	ns := m.selected.Namespace
 	if ns == "" {
 		ns = "default"
@@ -455,49 +499,56 @@ func (m *tuiModel) performAction(action string) {
 	switch action {
 	case "start":
 		if backend == "incus" {
-			incus.Start(name)
+			incus.NewClient(contextName).Start(name)
+		} else if backend == "libvirt" {
+			libvirt.NewClient(contextName).Start(name)
 		} else if backend == "kubevirt" {
-			kubevirt.NewClient(ns).StartVM(name)
+			kubevirt.NewClientForContext(ns, contextName).StartVM(name)
 		} else {
 			qemu.Start(name)
 		}
 	case "stop":
 		if backend == "incus" {
-			incus.Stop(name)
+			incus.NewClient(contextName).Stop(name)
+		} else if backend == "libvirt" {
+			libvirt.NewClient(contextName).Stop(name)
 		} else if backend == "kubevirt" {
-			kubevirt.NewClient(ns).StopVM(name)
+			kubevirt.NewClientForContext(ns, contextName).StopVM(name)
 		} else {
 			qemu.Stop(name)
 		}
 	case "restart":
 		if backend == "incus" {
-			incus.Stop(name)
-			incus.Start(name)
+			incus.NewClient(contextName).Stop(name)
+			incus.NewClient(contextName).Start(name)
+		} else if backend == "libvirt" {
+			libvirt.NewClient(contextName).Stop(name)
+			libvirt.NewClient(contextName).Start(name)
 		} else if backend == "kubevirt" {
-			kubevirt.NewClient(ns).RestartVM(name)
+			kubevirt.NewClientForContext(ns, contextName).RestartVM(name)
 		} else {
 			qemu.Stop(name)
 			qemu.Start(name)
 		}
 	case "pause":
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).PauseVM(name)
+			kubevirt.NewClientForContext(ns, contextName).PauseVM(name)
 		}
 	case "unpause":
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).UnpauseVM(name)
+			kubevirt.NewClientForContext(ns, contextName).UnpauseVM(name)
 		}
 	case "migrate":
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).Migrate(name, "")
+			kubevirt.NewClientForContext(ns, contextName).Migrate(name, "")
 		}
 	case "snapshot":
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).Snapshot(name, "")
+			kubevirt.NewClientForContext(ns, contextName).Snapshot(name, "")
 		}
 	case "export":
 		if backend == "kubevirt" {
-			out, err := kubevirt.NewClient(ns).Export(name, "", "")
+			out, err := kubevirt.NewClientForContext(ns, contextName).Export(name, "", "")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "export failed:", err)
 			} else {
@@ -506,25 +557,29 @@ func (m *tuiModel) performAction(action string) {
 		}
 	case "delete":
 		if backend == "incus" {
-			incus.Delete(name)
+			incus.NewClient(contextName).Delete(name)
+		} else if backend == "libvirt" {
+			libvirt.NewClient(contextName).Delete(name)
 		} else if backend == "kubevirt" {
-			kubevirt.NewClient(ns).DeleteVM(name)
+			kubevirt.NewClientForContext(ns, contextName).DeleteVM(name)
 		} else {
 			qemu.Delete(name)
 		}
 		if registryStore != nil {
-			registryStore.Remove(name)
+			registryStore.RemoveRef(m.selected.Ref())
 		}
 	case "viewer":
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).Viewer(name)
+			kubevirt.NewClientForContext(ns, contextName).Viewer(name)
+		} else if backend == "libvirt" {
+			libvirt.NewClient(contextName).Viewer(name)
 		} else {
 			qemu.Viewer(name)
 		}
 	case "ssh":
 		user, password := "", ""
 		if registryStore != nil {
-			if entry, ok := registryStore.Get(name); ok {
+			if entry, ok := registryStore.GetRef(m.selected.Ref()); ok {
 				user, password = entry.Username, entry.Password
 			}
 		}
@@ -535,7 +590,9 @@ func (m *tuiModel) performAction(action string) {
 			user = "root"
 		}
 		if backend == "kubevirt" {
-			kubevirt.NewClient(ns).SSH(name, user, "", "", 22, password, nil)
+			kubevirt.NewClientForContext(ns, contextName).SSH(name, user, "", "", 22, password, nil)
+		} else if backend == "incus" {
+			incus.NewClient(contextName).SSH(name, "")
 		} else {
 			qemu.SSH(name, user, "", "", 22, password, nil)
 		}
@@ -587,11 +644,12 @@ func runClone(src types.VM, dst string) error {
 	if ns == "" {
 		ns = kubevirt.DefaultNamespace
 	}
-	if err := kubevirt.NewClient(ns).Clone(src.Name, dst); err != nil {
+	if err := kubevirt.NewClientForContext(ns, src.Context).Clone(src.Name, dst); err != nil {
 		return err
 	}
 	if registryStore != nil {
-		if err := registryStore.Set(dst, types.RegistryEntry{Backend: "kubevirt", Namespace: ns}); err != nil {
+		ref := types.InstanceRef{Backend: "kubevirt", Context: src.Context, Namespace: ns, Name: dst}
+		if err := registryStore.SetRef(ref, types.RegistryEntry{Backend: "kubevirt", Context: src.Context, Namespace: ns}); err != nil {
 			return fmt.Errorf("saving registry entry: %w", err)
 		}
 	}
@@ -599,21 +657,73 @@ func runClone(src types.VM, dst string) error {
 }
 
 func (m *tuiModel) refreshList() {
-	items := []list.Item{}
-	vms, _ := kubevirt.NewClient("").ListVMs()
-	for _, vm := range vms {
-		items = append(items, vmToItem(vm))
-	}
-	qVMs, _ := qemu.List()
-	for _, vm := range qVMs {
-		items = append(items, vmToItem(vm))
-	}
+	items, errs := loadTUIItems()
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
 		items = append(items, ctToItem(c))
 	}
+	m.allItems, m.errors, m.refreshedAt = items, errs, time.Now()
+	m.applyContextFilter()
+}
+
+func loadTUIItems() ([]list.Item, map[string]string) {
+	result := fleet.List(context.Background())
+	items := make([]list.Item, 0, len(result.VMs))
+	seen := map[string]bool{}
+	for _, vm := range result.VMs {
+		items = append(items, vmToItem(vm))
+		seen[vm.ID] = true
+	}
+	// A local Incus daemon with instances is useful zero-config discovery and
+	// keeps demo mode representative; configured remotes are already in fleet.
+	if discovered, err := incus.List(); err == nil {
+		for _, vm := range discovered {
+			if !seen[vm.ID] {
+				items = append(items, vmToItem(vm))
+			}
+		}
+	}
+	return items, result.Errors
+}
+
+func (m *tuiModel) cycleContext(delta int) {
+	targets := []string{"all"}
+	for _, target := range config.Contexts() {
+		targets = append(targets, target.Name)
+	}
+	m.contextPos = (m.contextPos + delta + len(targets)) % len(targets)
+	m.contextName = targets[m.contextPos]
+	m.applyContextFilter()
+}
+
+func (m *tuiModel) applyContextFilter() {
+	items := m.allItems
+	if m.contextName != "" && m.contextName != "all" {
+		if target, ok := config.FindContext(m.contextName); ok {
+			items = nil
+			for _, item := range m.allItems {
+				switch value := item.(type) {
+				case vmItem:
+					if value.vm.Backend == target.Backend && value.vm.Context == target.Context {
+						items = append(items, item)
+					}
+				case ctItem:
+					if target.Backend == "kubevirt" {
+						items = append(items, item)
+					}
+				}
+			}
+		}
+	}
 	m.list.SetItems(items)
-	m.list.Title = tuiListTitle(items)
+	m.list.Title = tuiListTitle(items) + "  ·  context:" + defaultString(m.contextName, "all")
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // tuiListTitle summarizes the fleet in the header: "Corral · 8 VMs · 2 CTs".
@@ -636,6 +746,9 @@ func tuiListTitle(items []list.Item) string {
 func (m tuiModel) View() string {
 	if m.quitting {
 		return ""
+	}
+	if m.showHelp {
+		return tuiHelpView()
 	}
 
 	if m.state == "edit" {
@@ -661,10 +774,16 @@ func (m tuiModel) View() string {
 
 	if m.state == "doctor" {
 		var sb strings.Builder
-		sb.WriteString(tuiTitle.Render(" Cluster health "))
+		sb.WriteString(tuiTitle.Render(" Fleet health "))
 		sb.WriteString("\n\n")
 		fixable := false
+		lastTarget := ""
 		for _, c := range m.doctorRows {
+			target := c.Context + " [" + c.Backend + "]"
+			if target != lastTarget {
+				sb.WriteString("\n  " + tuiRunning.Render(target) + "\n")
+				lastTarget = target
+			}
 			mark := tuiRunning.Render("●")
 			if !c.OK {
 				mark = tuiStopped.Render("○")
@@ -698,7 +817,60 @@ func (m tuiModel) View() string {
 		return m.actionsList.View()
 	}
 
-	return m.list.View()
+	listView := m.list.View()
+	footer := tuiHelp.Render("  / search  tab context  enter actions  s start  x stop  r refresh  d doctor  ? help  q quit")
+	if len(m.errors) > 0 {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(fmt.Sprintf("  ⚠ %d context(s) unavailable", len(m.errors))) + footer
+	}
+	if m.width >= 100 {
+		detailWidth := m.width - m.width*2/3 - 3
+		listView = lipgloss.JoinHorizontal(lipgloss.Top, listView, tuiDetailView(m.list.SelectedItem(), detailWidth, m.errors))
+	}
+	return listView + "\n" + footer
+}
+
+func tuiHelpView() string {
+	return tuiTitle.Render(" Corral command deck ") + "\n\n" +
+		"  ↑/↓ or j/k   move through the fleet\n" +
+		"  /            fuzzy search name, ID, backend, context, node, or IP\n" +
+		"  tab / [ ]    cycle all and individual contexts\n" +
+		"  enter        capability-aware actions\n" +
+		"  s / x        quick start / graceful stop\n" +
+		"  r            refresh every backend\n" +
+		"  d            backend diagnostics\n" +
+		"  q            quit\n\n" + tuiHelp.Render("  press any key to return")
+}
+
+func tuiDetailView(item list.Item, width int, errs map[string]string) string {
+	style := lipgloss.NewStyle().Width(width).Padding(1).BorderLeft(true).BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+	vmItem, ok := item.(vmItem)
+	if !ok {
+		if ctItem, yes := item.(ctItem); yes {
+			return style.Render(fmt.Sprintf("CONTAINER\n\n%s\n%s/%s\n%d CPU · %s", ctItem.ct.Name, ctItem.ct.Namespace, ctItem.ct.Phase, ctItem.ct.CPU, ctItem.ct.Mem))
+		}
+		if len(errs) > 0 {
+			var lines []string
+			for target, message := range errs {
+				lines = append(lines, "⚠ "+target+"\n  "+message)
+			}
+			return style.Render("PARTIAL FLEET\n\n" + strings.Join(lines, "\n\n"))
+		}
+		return style.Render("No instances in this view.\n\nPress tab to change context or / to clear search.")
+	}
+	vm := vmItem.vm
+	state := "○ " + vm.Status
+	if vm.Running {
+		state = "● " + vm.Status
+	}
+	caps := []string{}
+	for name, enabled := range map[string]bool{"ssh": vm.Capabilities.SSH, "tty": vm.Capabilities.TTY, "vnc": vm.Capabilities.VNC, "rdp": vm.Capabilities.RDP, "snap": vm.Capabilities.Snapshots, "migrate": vm.Capabilities.Migrate} {
+		if enabled {
+			caps = append(caps, name)
+		}
+	}
+	body := fmt.Sprintf("%s\n%s\n\n%s\n\nBACKEND\n%s\n\nCONTEXT\n%s\n\nLOCATION\n%s / %s\n\nRESOURCES\n%d CPU · %s\n\nNETWORK\n%s\n\nACTIONS\n%s",
+		tuiRunning.Render(vm.Name), tuiHelp.Render(vm.ID), state, vm.Backend, defaultString(vm.Context, "local"), defaultString(vm.Namespace, "—"), defaultString(vm.Node, "—"), vm.CPU, defaultString(vm.Mem, "—"), defaultString(vm.IP, "not discovered"), strings.Join(caps, " · "))
+	return style.Render(body)
 }
 
 // ── Actions list delegate ─────────────────────────────────────────

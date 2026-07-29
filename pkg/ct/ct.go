@@ -405,7 +405,7 @@ func Console(name, namespace string) error {
 		return err
 	}
 	args := append([]string{"exec", "-it", name, "-n", namespace, "--"}, shellCmd...)
-	cmd := exec.Command("kubectl", args...)
+	cmd := shell.Command("kubectl", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -441,7 +441,7 @@ func Exec(name, namespace string, argv []string, script string) error {
 		return err
 	}
 	args := append([]string{"exec", name, "-n", namespace, "--"}, execArgv(spec.Privileged, argv, script)...)
-	cmd := exec.Command("kubectl", args...)
+	cmd := shell.Command("kubectl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -470,7 +470,7 @@ func ExecParallel(name, namespace string, cmds []NamedCommand) error {
 		go func(cmd NamedCommand) {
 			args := append([]string{"exec", name, "-n", namespace, "--"},
 				execArgv(spec.Privileged, cmd.Argv, cmd.Script)...)
-			c := exec.Command("kubectl", args...)
+			c := shell.Command("kubectl", args...)
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			if cmd.Name != "" {

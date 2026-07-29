@@ -1,16 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"github.com/tuna-os/corral/pkg/incus"
-	"github.com/tuna-os/corral/pkg/kubevirt"
-	"github.com/tuna-os/corral/pkg/plugin"
-	"github.com/tuna-os/corral/pkg/qemu"
+	"github.com/tuna-os/corral/pkg/fleet"
 	"github.com/tuna-os/corral/pkg/types"
 )
 
@@ -20,9 +19,11 @@ var (
 	stoppedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
+var selectedVM *types.VM
+
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all VMs (both backends)",
+	Short: "List VMs across every configured context",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runList()
 	},
@@ -33,21 +34,17 @@ func init() {
 }
 
 func runList() error {
-	var vms []types.VM
-	kvms, _ := kubevirt.NewClient("").ListVMs()
-	vms = append(vms, kvms...)
-	qvms, _ := qemu.List()
-	vms = append(vms, qvms...)
-	if plugin.IsInstalled("incus") {
-		ivms, _ := incus.List()
-		vms = append(vms, ivms...)
-	}
+	result := fleet.List(context.Background())
+	vms := result.VMs
 
 	if len(vms) == 0 {
 		fmt.Println("No VMs found. Create one: corral create <name>")
 		return nil
 	}
 	printVMList(vms)
+	for target, message := range result.Errors {
+		fmt.Printf("warning: context %s unavailable: %s\n", target, message)
+	}
 	return nil
 }
 
@@ -55,8 +52,8 @@ func printVMList(vms []types.VM) {
 	sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
 
 	fmt.Printf("%s\n", headerStyle.Render(
-		fmt.Sprintf("%-20s  %-8s  %-16s  %-12s  %-4s  %-6s  %s",
-			"NAME", "BACKEND", "STATUS", "NAMESPACE", "CPU", "MEM", "NODE")))
+		fmt.Sprintf("%-20s  %-10s  %-16s  %-18s  %-12s  %-4s  %-6s  %s",
+			"NAME", "BACKEND", "STATUS", "CONTEXT", "NAMESPACE", "CPU", "MEM", "NODE")))
 	fmt.Println("────────────────────────────────────────────────────────────────────────────────────────────────────")
 
 	for _, vm := range vms {
@@ -95,8 +92,16 @@ func printVMList(vms []types.VM) {
 			extra += "  ⏳" + ephemeralSummary(vm)
 		}
 
-		fmt.Printf("%-20s  %-8s  %-16s  %-12s  %-4d  %-6s  %s  %s\n",
-			vm.Name, vm.Backend, status, ns, vm.CPU, vm.Mem, node, extra)
+		contextName := vm.Context
+		if contextName == "" {
+			contextName = "local"
+		}
+		if vm.Peer != "" {
+			contextName = vm.Peer + "/" + contextName
+		}
+		fmt.Printf("%-20s  %-10s  %-16s  %-18s  %-12s  %-4d  %-6s  %s  %s\n",
+			vm.Name, vm.Backend, status, contextName, ns, vm.CPU, vm.Mem, node, extra)
+		fmt.Printf("  id: %s\n", vm.ID)
 	}
 }
 
@@ -121,29 +126,54 @@ func ephemeralSummary(vm types.VM) string {
 }
 
 func resolveBackend(name string) string {
-	if registryStore != nil {
-		if entry, ok := registryStore.Get(name); ok {
-			return entry.Backend
+	if selectedVM != nil && selectedVM.Name == name {
+		activateVMContext(*selectedVM)
+		return selectedVM.Backend
+	}
+	vm, err := resolveVM(name)
+	if err != nil {
+		if registryStore != nil {
+			if entry, ok := registryStore.Get(name); ok {
+				activateVMContext(types.VM{Backend: entry.Backend, Context: entry.Context})
+				return entry.Backend
+			}
 		}
+		return ""
 	}
-	// Check all KubeVirt namespaces (VMExists only checks one)
-	client := kubevirt.NewClient("")
-	vms, _ := client.ListVMs()
-	for _, vm := range vms {
-		if vm.Name == name {
-			return "kubevirt"
-		}
-	}
-	if qemu.Exists(name) {
-		return "qemu"
-	}
-	return ""
+	activateVMContext(vm)
+	return vm.Backend
 }
 
 func requireBackend(name string) (string, error) {
-	b := resolveBackend(name)
-	if b == "" {
-		return "", fmt.Errorf("VM %q does not exist", name)
+	if selectedVM != nil && selectedVM.Name == name {
+		activateVMContext(*selectedVM)
+		return selectedVM.Backend, nil
 	}
-	return b, nil
+	vm, err := resolveVM(name)
+	if err != nil {
+		if registryStore != nil {
+			if entry, ok := registryStore.Get(name); ok {
+				activateVMContext(types.VM{Backend: entry.Backend, Context: entry.Context})
+				return entry.Backend, nil
+			}
+		}
+		return "", err
+	}
+	activateVMContext(vm)
+	return vm.Backend, nil
+}
+
+func resolveVM(selector string) (types.VM, error) {
+	return fleet.Resolve(fleet.List(context.Background()).VMs, selector)
+}
+
+func activateVMContext(vm types.VM) {
+	switch vm.Backend {
+	case "kubevirt":
+		_ = os.Setenv("CORRAL_KUBE_CONTEXT", vm.Context)
+	case "incus":
+		_ = os.Setenv("CORRAL_INCUS_REMOTE", vm.Context)
+	case "libvirt":
+		_ = os.Setenv("CORRAL_LIBVIRT_URI", vm.Context)
+	}
 }

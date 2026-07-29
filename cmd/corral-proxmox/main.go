@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/proxmox"
 )
 
@@ -31,6 +32,9 @@ func displayAddr(addr string) string {
 }
 
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "proxmox", Version: "0.1.0", Description: "Proxmox VE API compatibility server", Capabilities: []string{"cli-command", "http-server"}, Permissions: []string{"listen on network", "mutate KubeVirt VMs"}, SupportedBackends: []string{"kubevirt"}}) {
+		return
+	}
 	var addr, namespace, certFile, keyFile, token string
 
 	serve := &cobra.Command{

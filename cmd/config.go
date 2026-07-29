@@ -25,6 +25,8 @@ Example config.yaml:
 		}
 
 		fmt.Printf("Config path:  %s\n", config.DefaultPath())
+		fmt.Printf("Backend:      %s\n", config.DefaultBackend())
+		fmt.Printf("Incus remote: %s\n", config.IncusRemote())
 		if key := cfg.Tailscale.AuthKey; key != "" {
 			if len(key) > 10 {
 				key = key[:10]
@@ -42,6 +44,17 @@ Example config.yaml:
 	},
 }
 
+var configSetBackendCmd = &cobra.Command{
+	Use: "set-default-backend <qemu|kubevirt|incus|libvirt>", Short: "Set the backend used by unqualified create commands",
+	Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error { return config.SetDefaultBackend(args[0]) },
+}
+
+var configGetBackendCmd = &cobra.Command{
+	Use: "get-default-backend", Short: "Print the default backend", Args: cobra.NoArgs,
+	Run: func(_ *cobra.Command, _ []string) { fmt.Println(config.DefaultBackend()) },
+}
+
 func init() {
 	rootCmd.AddCommand(configCmd)
+	configCmd.AddCommand(configSetBackendCmd, configGetBackendCmd)
 }

@@ -56,12 +56,19 @@ func handleDoctorFix(w http.ResponseWriter, r *http.Request) {
 // ── Extensions (plugins) store ────────────────────────────────────
 
 type pluginItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Version     string `json:"version"`
-	Homepage    string `json:"homepage,omitempty"`
-	Installed   bool   `json:"installed"`
-	InStore     bool   `json:"inStore"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	Version           string   `json:"version"`
+	Homepage          string   `json:"homepage,omitempty"`
+	Installed         bool     `json:"installed"`
+	InStore           bool     `json:"inStore"`
+	Source            string   `json:"source,omitempty"`
+	Publisher         string   `json:"publisher,omitempty"`
+	License           string   `json:"license,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	Permissions       []string `json:"permissions,omitempty"`
+	SupportedBackends []string `json:"supportedBackends,omitempty"`
+	Pinned            bool     `json:"pinned,omitempty"`
 }
 
 // GET /api/plugins — marketplace entries merged with installed state.
@@ -72,9 +79,10 @@ func handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []pluginItem{}
 	seen := map[string]bool{}
-	if idx, err := plugin.FetchIndex(); err == nil {
+	if idx, _ := plugin.FetchAll(); idx != nil {
 		for _, e := range idx.Plugins {
-			items = append(items, pluginItem{e.Name, e.Description, e.Version, e.Homepage, installed[e.Name], true})
+			state, _ := plugin.ReadState(e.Name)
+			items = append(items, pluginItem{Name: e.Name, Description: e.Description, Version: e.Version, Homepage: e.Homepage, Installed: installed[e.Name], InStore: true, Source: e.Source, Publisher: e.Publisher.Name, License: e.License, Capabilities: e.Capabilities, Permissions: e.Permissions, SupportedBackends: e.SupportedBackends, Pinned: state.Pinned})
 			seen[e.Name] = true
 		}
 	}
@@ -89,14 +97,26 @@ func handlePlugins(w http.ResponseWriter, r *http.Request) {
 // POST /api/plugins/{name}/install
 func handleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	idx, err := plugin.FetchIndex()
-	if err != nil {
-		errResp(w, http.StatusBadGateway, err)
+	idx, errs := plugin.FetchAll()
+	if len(idx.Plugins) == 0 && len(errs) > 0 {
+		errResp(w, http.StatusBadGateway, errs[0])
 		return
 	}
-	e := idx.Find(name)
+	lookup := name
+	if source := r.URL.Query().Get("source"); source != "" {
+		lookup = source + "/" + name
+	}
+	e := idx.Find(lookup)
 	if e == nil {
 		errResp(w, http.StatusNotFound, fmt.Errorf("no plugin %q in the marketplace", name))
+		return
+	}
+	var consent struct {
+		AcceptPermissions bool `json:"acceptPermissions"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&consent)
+	if len(e.Permissions) > 0 && !consent.AcceptPermissions {
+		errResp(w, http.StatusConflict, fmt.Errorf("plugin requests permissions %v; explicit acceptPermissions is required", e.Permissions))
 		return
 	}
 	done := taskBegin("install plugin", name)
@@ -155,7 +175,7 @@ func handleScale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := taskBegin("scale", ns+"/"+name)
-	if err := kubevirt.NewClient(ns).Scale(name, b.CPU, b.Mem); err != nil {
+	if err := kubeClient(r, ns).Scale(name, b.CPU, b.Mem); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -186,7 +206,7 @@ func handleSetOptions(w http.ResponseWriter, r *http.Request) {
 		MachineType: b.MachineType,
 		BootOrder:   b.BootOrder,
 	}
-	if err := kubevirt.NewClient(ns).SetVMOptions(name, opts); err != nil {
+	if err := kubeClient(r, ns).SetVMOptions(name, opts); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -203,7 +223,7 @@ func handleAddVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&b)
 	done := taskBegin("add disk", ns+"/"+name)
-	pvc, err := kubevirt.NewClient(ns).AddVolume(name, b.Size)
+	pvc, err := kubeClient(r, ns).AddVolume(name, b.Size)
 	done(err)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, err)
@@ -216,7 +236,7 @@ func handleAddVolume(w http.ResponseWriter, r *http.Request) {
 func handleRemoveVolume(w http.ResponseWriter, r *http.Request) {
 	ns, name, vol := r.PathValue("ns"), r.PathValue("name"), r.PathValue("vol")
 	done := taskBegin("detach disk", ns+"/"+name)
-	if err := kubevirt.NewClient(ns).RemoveVolume(name, vol); err != nil {
+	if err := kubeClient(r, ns).RemoveVolume(name, vol); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -237,7 +257,7 @@ func handleExpand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := taskBegin("expand disk", ns+"/"+b.PVC)
-	if err := kubevirt.NewClient(ns).ExpandDisk(b.PVC, b.Size); err != nil {
+	if err := kubeClient(r, ns).ExpandDisk(b.PVC, b.Size); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -249,7 +269,7 @@ func handleExpand(w http.ResponseWriter, r *http.Request) {
 // GET /api/vms/{ns}/{name}/snapshots
 func handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
-	snaps, err := kubevirt.NewClient(ns).ListSnapshots(name)
+	snaps, err := kubeClient(r, ns).ListSnapshots(name)
 	if err != nil {
 		errResp(w, http.StatusBadGateway, err)
 		return
@@ -265,7 +285,7 @@ func handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&b)
 	done := taskBegin("snapshot", ns+"/"+name)
-	snap, err := kubevirt.NewClient(ns).Snapshot(name, b.Name)
+	snap, err := kubeClient(r, ns).Snapshot(name, b.Name)
 	done(err)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, err)
@@ -278,7 +298,7 @@ func handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 func handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	ns, name, snap := r.PathValue("ns"), r.PathValue("name"), r.PathValue("snap")
 	done := taskBegin("restore snapshot", ns+"/"+name)
-	if err := kubevirt.NewClient(ns).RestoreSnapshot(name, snap); err != nil {
+	if err := kubeClient(r, ns).RestoreSnapshot(name, snap); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -291,7 +311,7 @@ func handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 func handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	ns, snap := r.PathValue("ns"), r.PathValue("snap")
 	done := taskBegin("delete snapshot", ns+"/"+snap)
-	if err := kubevirt.NewClient(ns).DeleteSnapshot(snap); err != nil {
+	if err := kubeClient(r, ns).DeleteSnapshot(snap); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -311,7 +331,7 @@ func handleClone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := taskBegin("clone", ns+"/"+name+" → "+b.Target)
-	if err := kubevirt.NewClient(ns).Clone(name, b.Target); err != nil {
+	if err := kubeClient(r, ns).Clone(name, b.Target); err != nil {
 		done(err)
 		errResp(w, http.StatusInternalServerError, err)
 		return
@@ -326,7 +346,7 @@ func handleClone(w http.ResponseWriter, r *http.Request) {
 // GET /api/vms/{ns}/{name}/guestinfo
 func handleGuestInfo(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
-	info, err := kubevirt.NewClient(ns).GuestInfo(name)
+	info, err := kubeClient(r, ns).GuestInfo(name)
 	if err != nil {
 		errResp(w, http.StatusServiceUnavailable, err)
 		return
@@ -337,7 +357,7 @@ func handleGuestInfo(w http.ResponseWriter, r *http.Request) {
 // GET /api/vms/{ns}/{name}/events
 func handleEvents(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
-	evs, err := kubevirt.NewClient(ns).Events(name)
+	evs, err := kubeClient(r, ns).Events(name)
 	if err != nil {
 		errResp(w, http.StatusBadGateway, err)
 		return
@@ -348,7 +368,7 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 // GET /api/vms/{ns}/{name}/metrics
 func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
-	jsonResp(w, http.StatusOK, kubevirt.NewClient(ns).Metrics(name))
+	jsonResp(w, http.StatusOK, kubeClient(r, ns).Metrics(name))
 }
 
 // GET /api/vms/{ns}/{name}/metrics/history — retained CPU samples (millicores)
@@ -369,7 +389,7 @@ func handleMarkTemplate(w http.ResponseWriter, r *http.Request) {
 		On bool `json:"on"`
 	}
 	json.NewDecoder(r.Body).Decode(&b)
-	if err := kubevirt.NewClient(ns).MarkTemplate(name, b.On); err != nil {
+	if err := kubeClient(r, ns).MarkTemplate(name, b.On); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -387,7 +407,7 @@ func handleSetTag(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, fmt.Errorf("tag is required"))
 		return
 	}
-	if err := kubevirt.NewClient(ns).SetTag(name, b.Tag, b.On); err != nil {
+	if err := kubeClient(r, ns).SetTag(name, b.Tag, b.On); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -410,7 +430,7 @@ func handleAddNIC(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, fmt.Errorf("nad is required"))
 		return
 	}
-	if err := kubevirt.NewClient(ns).AddNIC(name, b.NAD, b.Iface); err != nil {
+	if err := kubeClient(r, ns).AddNIC(name, b.NAD, b.Iface); err != nil {
 		errResp(w, http.StatusInternalServerError, err)
 		return
 	}

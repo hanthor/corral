@@ -19,6 +19,33 @@ func TestAuthKey_FromEnv(t *testing.T) {
 	}
 }
 
+func TestContextSetAggregatesAndDefaultOnlySelects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+	if err := AddContext(ContextConfig{Name: "lab-k8s", Backend: "kubevirt", Context: "lab"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddContext(ContextConfig{Name: "hypervisor", Backend: "libvirt", Context: "qemu+ssh://hv/system"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultContext("lab-k8s"); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultContext(); got.Name != "lab-k8s" || got.Context != "lab" {
+		t.Fatalf("default=%+v", got)
+	}
+	seen := map[string]bool{}
+	for _, target := range Contexts() {
+		seen[target.Name] = true
+	}
+	for _, name := range []string{"local", "lab-k8s", "hypervisor"} {
+		if !seen[name] {
+			t.Errorf("context %q disappeared after switching default", name)
+		}
+	}
+}
+
 func TestAuthKey_FromFile(t *testing.T) {
 	// Clear env var so we fall through to file
 	t.Setenv("TS_AUTHKEY", "")
