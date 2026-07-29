@@ -1121,7 +1121,7 @@ function renderVM(main, vm) {
         <button class="btn" data-act="export" ${vm.running ? 'disabled' : ''}
           title="${vm.running ? 'Stop the VM to export its disk' : 'Download a disk backup'}">${icon('download')} Export</button>
         ${vm.bootc && caps.bootc ? `<button class="btn" data-act="upgrade"
-          title="Rebuild this bootc VM's disk from the latest image and restart">${icon('restart')} Upgrade</button>` : ''}`}
+          title="Rebuild this bootc VM's disk from the latest image and restart">${icon('restart')} Upgrade</button>` : ''}` : ''}
         ${capability.delete ? `<button class="btn danger" data-act="delete">${icon('trash')} Delete</button>` : ''}
       </div>
     </div>

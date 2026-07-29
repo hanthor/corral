@@ -65,7 +65,7 @@ func Contexts() []ContextConfig {
 	// remains discoverable without explicit migration. Incus/libvirt have no
 	// equivalent ubiquitous client default, so those require opt-in below.
 	legacy = append(legacy, ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: cfg.Kubevirt.Context})
-	if cfg.Incus.Remote != "" || cfg.Default.Backend == "incus" {
+	if cfg.Incus.Remote != "" || cfg.Default.Backend == "incus" || os.Getenv("CORRAL_INCUS_REMOTE") != "" {
 		legacy = append(legacy, ContextConfig{Name: "incus", Backend: "incus", Context: IncusRemote()})
 	}
 	if cfg.Libvirt.URI != "" || cfg.Default.Backend == "libvirt" {

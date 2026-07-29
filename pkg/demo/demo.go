@@ -32,6 +32,9 @@ import (
 // returns the runner so callers with their own seam (pkg/web's defaultRunner)
 // can install it there too. Call before any backend use.
 func Enable() shell.Runner {
+	// Make the in-memory Incus remote an explicit inventory context. Production
+	// never invents an Incus target, while demo surfaces still exercise it.
+	os.Setenv("CORRAL_INCUS_REMOTE", "local")
 	d := newDemoCluster()
 	kubevirt.SetDefaultRunner(d)
 	kubevirt.SetPackageRunner(d)

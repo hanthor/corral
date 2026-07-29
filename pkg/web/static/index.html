@@ -11,7 +11,7 @@
 <script src="vendor/xterm.min.js"></script>
 <script src="vendor/addon-fit.min.js"></script>
   <!-- IronRDP web component for in-browser RDP (ADR-0002 phase 2). -->
-  <script src="vendor/iron-remote-desktop.js"></script>
+  <script type="module" src="vendor/iron-remote-desktop.js"></script>
 <!-- app.js (a module, deferred by spec) must run before Alpine's own deferred
      script so its alpine:init listener is registered before Alpine auto-starts
      — deferred/module scripts execute in document order, so order matters here. -->
