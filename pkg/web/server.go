@@ -256,8 +256,8 @@ func statusFor(err error) int {
 func handleListVMs(w http.ResponseWriter, r *http.Request) {
 	result := fleet.List(r.Context())
 	vms := append(result.VMs, peerVMs()...)
-	if len(vms) == 0 && len(config.Peers()) == 0 && result.Errors["kubevirt"] != "" {
-		errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %s", result.Errors["kubevirt"]))
+	if len(vms) == 0 && len(config.Peers()) == 0 && len(result.Errors) > 0 && len(result.Errors) == len(config.Contexts()) {
+		errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %v", result.Errors))
 		return
 	}
 	if vms == nil {
@@ -473,13 +473,12 @@ func handleContexts(w http.ResponseWriter, _ *http.Request) {
 func resolveCreateTarget(name string) (config.ContextConfig, error) {
 	switch name {
 	case "":
-		// Backward compatibility for API clients predating named targets. The
-		// current web UI always sends its selected/default context explicitly.
-		return config.ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: config.KubeContext()}, nil
+		// Backward compatibility for API clients predating named targets.
+		return config.DefaultContext(), nil
 	case "local":
 		return config.ContextConfig{Name: "local", Backend: "qemu"}, nil
 	case "cluster":
-		return config.ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: config.KubeContext()}, nil
+		return config.DefaultContext(), nil
 	default:
 		if target, ok := config.FindContext(name); ok {
 			return target, nil
