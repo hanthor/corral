@@ -1108,7 +1108,9 @@ test.describe('Corral web UI', () => {
     for (let i = 0; i < 20; i++) {
       await page.goto(CORRAL_URL);
       await page.waitForSelector('#content table', { timeout: 15_000 }).catch(() => {});
-      const row = page.locator(`#content tr[data-key="${NS}/${name}"]`);
+      // Multi-context inventory keys are peer/context/namespace/name. Match the
+      // stable namespace/name suffix so this test also covers federated rows.
+      const row = page.locator(`#content tr[data-key$="/${NS}/${name}"]`);
       if (await row.count()) return row;
       await delay(2000);
     }
@@ -1192,7 +1194,7 @@ test.describe('Corral web UI', () => {
     await expect(row.locator('.chip.mini')).toHaveText(/e2e/);
     // The filter bar appears and narrows the table to the tagged VM.
     await page.click('#content [data-tagfilter="e2e"]');
-    await expect(page.locator(`#content tr[data-key="${NS}/${vm}"]`)).toBeVisible();
+    await expect(page.locator(`#content tr[data-key$="/${NS}/${vm}"]`)).toBeVisible();
   });
 
   // ── Containers (CT) — #50 first slice ─────────────────────────────
