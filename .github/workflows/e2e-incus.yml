@@ -83,19 +83,30 @@ jobs:
           grep -E '^incus-ci-vm[[:space:]]+incus' /tmp/fleet.txt
           grep -E '^libvirt-ci[[:space:]]+libvirt' /tmp/fleet.txt
 
-      # Snapshot adapters (#134) against the real tools. The fake-runner unit
-      # tests can only assert the command syntax hasn't changed; this asserts
-      # it is correct — virsh, incus, and qemu-img each really do what the
-      # adapter believes. Each subtest skips if its backend is missing, so a
-      # runner without one degrades instead of failing.
-      - name: Snapshot and export adapters against real backends
+      # The backend adapters (#134 snapshot, #131 export, #129 device) against
+      # the real tools. The fake-runner unit tests can only assert the command
+      # syntax hasn't changed; this asserts it is correct — virsh, incus and
+      # qemu-img each really do what the adapter believes.
+      #
+      # This matters most for the device adapters, whose syntax and output
+      # shapes were written from documentation rather than observed on
+      # hardware: discovery here parses what a real host's PCI bus produces,
+      # and the generated <hostdev> XML is validated by a real libvirt.
+      # Each subtest skips if its backend is missing, so a runner without one
+      # degrades instead of failing.
+      - name: Snapshot, export and device adapters against real backends
         run: |
-          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ ./pkg/export/ | tee /tmp/snap-e2e.txt
+          # pipefail, or `go test | tee` reports tee's exit status and a real
+          # test failure lands as a green tick. Found exactly that way: an
+          # Incus device-discovery failure passed this step unnoticed.
+          set -o pipefail
+          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ ./pkg/export/ ./pkg/device/ | tee /tmp/snap-e2e.txt
           # The subtests skip when their backend is missing, which keeps the
           # file runnable on a laptop — but this runner installs all three, so
           # a skip here means the test verified nothing and the green tick
           # would be lying. Fail on it.
-          for backend in QEMU Libvirt Incus QEMUExport LibvirtExport IncusExport; do
+          for backend in QEMU Libvirt Incus QEMUExport LibvirtExport IncusExport \
+                         LibvirtDeviceDiscovery IncusDeviceDiscovery; do
             if grep -q "SKIP: TestE2E_${backend}\b" /tmp/snap-e2e.txt; then
               echo "::error::TestE2E_${backend} skipped on a runner that has that backend installed"
               exit 1
