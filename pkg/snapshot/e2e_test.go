@@ -104,12 +104,21 @@ func TestE2E_Libvirt(t *testing.T) {
 	realRunner(t)
 	requireBinary(t, "qemu-img")
 
-	// qemu:///session is per-user: no sudo, no shared state with the host's
-	// system domains, so the test cannot disturb anything real.
-	const uri = "qemu:///session"
-	if err := exec.Command("virsh", "-c", uri, "connect").Run(); err != nil {
-		t.Skipf("no usable %s: %v", uri, err)
+	// Prefer qemu:///session — per-user, no sudo, no shared state with the
+	// host's real domains. CI runs a system libvirtd and no session one, so
+	// fall back rather than skipping there: a subtest that silently skips on
+	// the only machine with libvirt installed verifies nothing.
+	uri := ""
+	for _, candidate := range []string{"qemu:///session", "qemu:///system"} {
+		if err := exec.Command("virsh", "-c", candidate, "connect").Run(); err == nil {
+			uri = candidate
+			break
+		}
 	}
+	if uri == "" {
+		t.Skip("no usable libvirt connection (tried qemu:///session and qemu:///system)")
+	}
+	t.Logf("using %s", uri)
 
 	dir := t.TempDir()
 	disk := filepath.Join(dir, "e2e.qcow2")

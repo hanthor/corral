@@ -90,7 +90,17 @@ jobs:
       # runner without one degrades instead of failing.
       - name: Snapshot adapters against real backends
         run: |
-          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/
+          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ | tee /tmp/snap-e2e.txt
+          # The subtests skip when their backend is missing, which keeps the
+          # file runnable on a laptop — but this runner installs all three, so
+          # a skip here means the test verified nothing and the green tick
+          # would be lying. Fail on it.
+          for backend in QEMU Libvirt Incus; do
+            if grep -q "SKIP: TestE2E_${backend}\b" /tmp/snap-e2e.txt; then
+              echo "::error::TestE2E_${backend} skipped on a runner that has that backend installed"
+              exit 1
+            fi
+          done
 
       - name: Multi-backend web inventory
         run: |
