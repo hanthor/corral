@@ -235,3 +235,72 @@ func TestDefaultFirmware(t *testing.T) {
 		}
 	})
 }
+
+// A host with no kubeconfig must not be handed a kubevirt context it can never
+// reach: every consumer of Contexts (fleet.List, doctor, the web dashboard)
+// would then report a permanent failure for a backend the user never selected.
+func TestContexts_KubevirtNeedsAKubeconfig(t *testing.T) {
+	clearBackendEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("CORRAL_INCUS_REMOTE", "")
+		t.Setenv("CORRAL_LIBVIRT_URI", "")
+		t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	}
+	hasKubevirt := func() bool {
+		for _, c := range Contexts() {
+			if c.Backend == "kubevirt" {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("absent on a qemu-only host", func(t *testing.T) {
+		clearBackendEnv(t)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("KUBECONFIG", "")
+		if hasKubevirt() {
+			t.Errorf("kubevirt context offered without a kubeconfig: %+v", Contexts())
+		}
+	})
+
+	t.Run("present once a kubeconfig exists", func(t *testing.T) {
+		clearBackendEnv(t)
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("KUBECONFIG", "")
+		kube := filepath.Join(home, ".kube")
+		if err := os.MkdirAll(kube, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(kube, "config"), []byte("apiVersion: v1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !hasKubevirt() {
+			t.Errorf("kubevirt context missing with ~/.kube/config present: %+v", Contexts())
+		}
+	})
+
+	// KUBECONFIG naming a file that isn't there is the same as having none.
+	t.Run("absent when KUBECONFIG points at nothing", func(t *testing.T) {
+		clearBackendEnv(t)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "does-not-exist"))
+		if hasKubevirt() {
+			t.Errorf("kubevirt context offered for an unreadable KUBECONFIG: %+v", Contexts())
+		}
+	})
+
+	// An explicitly configured cluster is honoured whatever the filesystem says.
+	t.Run("present when explicitly configured", func(t *testing.T) {
+		clearBackendEnv(t)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("KUBECONFIG", "")
+		if err := SetKubeContext("lab"); err != nil {
+			t.Fatal(err)
+		}
+		if !hasKubevirt() {
+			t.Errorf("configured kubevirt context dropped: %+v", Contexts())
+		}
+	})
+}

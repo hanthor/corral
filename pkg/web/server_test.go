@@ -287,7 +287,9 @@ func TestHandleCreateVM_ImportURL(t *testing.T) {
 	fx.Runner.AddResponseKV("kubectl", []string{"apply", "-f", "-"}, "", nil)
 
 	resp := mustPost(t, fx.Server.URL+"/api/vms",
-		`{"name":"myvm","import":"https://example.com/jammy.qcow2","cpu":2,"mem":"4G","disk":"10G"}`)
+		// An import URL is one of the two shapes the local backend also serves,
+		// so this asks for the cluster explicitly to exercise the CDI path.
+		`{"name":"myvm","target":"cluster","import":"https://example.com/jammy.qcow2","cpu":2,"mem":"4G","disk":"10G"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
@@ -859,7 +861,9 @@ func TestHandleCreateVM_ISOSource(t *testing.T) {
 		"", errSimulated) // VM doesn't exist yet
 
 	resp := mustPost(t, fx.Server.URL+"/api/vms",
-		`{"name":"isovm","iso":"https://example.com/debian.iso","cpu":2,"mem":"4G","disk":"20G"}`)
+		// As with the import URL above: an ISO is servable locally, so name the
+		// cluster to keep the CDI/blank-disk path under test.
+		`{"name":"isovm","target":"cluster","iso":"https://example.com/debian.iso","cpu":2,"mem":"4G","disk":"20G"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {

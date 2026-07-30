@@ -37,6 +37,13 @@ An independent backend universe: a kubeconfig context, Incus remote, or
 libvirt URI. Corral stores its own default and never changes kubectl/Incus
 global state. `--context` is a one-shot override.
 
+`local` (qemu) is always present. Every other context is either configured
+explicitly or discovered: the legacy `kubevirt` one appears only when this host
+has a kubeconfig, Incus only with a remote set, libvirt only with a URI. A
+context that is offered is a context Corral will list, doctor, and report
+failures for — so a qemu-only or Incus-only host must not be handed a cluster
+target it can never reach.
+
 ### Peer
 
 Another `corral web` API aggregated into the local dashboard. Direct guest
