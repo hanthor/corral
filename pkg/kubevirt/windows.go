@@ -1,6 +1,10 @@
 package kubevirt
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/tuna-os/corral/pkg/windows"
+)
 
 // Windows VM support, shared by the corral-windows plugin (CLI) and the web
 // server (GUI create flow). A Windows guest needs q35 + UEFI + TPM + Hyper-V
@@ -160,8 +164,8 @@ func CreateWindowsVM(name, ns, iso, disk, mem string, cpu int, unattended bool) 
 		return "", fmt.Errorf("creating boot disk PVC: %w", err)
 	}
 	if unattended {
-		password = randomWindowsPassword()
-		xml := AutounattendXML(name, password)
+		password = windows.RandomPassword()
+		xml := windows.AutounattendXML(name, password)
 		if err := Apply(GenerateAutounattendConfigMap(name, ns, xml)); err != nil {
 			return "", fmt.Errorf("creating autounattend ConfigMap: %w", err)
 		}

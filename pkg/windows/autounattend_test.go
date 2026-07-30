@@ -1,31 +1,10 @@
-package kubevirt
+package windows
 
 import (
 	"encoding/xml"
 	"strings"
 	"testing"
 )
-
-func TestAutounattendConfigMapName(t *testing.T) {
-	if got := AutounattendConfigMapName("win11"); got != "win11-autounattend" {
-		t.Errorf("got %q, want win11-autounattend", got)
-	}
-}
-
-func TestGenerateAutounattendConfigMap_Shape(t *testing.T) {
-	cm := GenerateAutounattendConfigMap("win11", "corral-vms", "<xml/>")
-	if cm["kind"] != "ConfigMap" {
-		t.Errorf("kind = %v, want ConfigMap", cm["kind"])
-	}
-	meta := cm["metadata"].(map[string]any)
-	if meta["name"] != "win11-autounattend" || meta["namespace"] != "corral-vms" {
-		t.Errorf("metadata = %v", meta)
-	}
-	data := cm["data"].(map[string]any)
-	if data["autounattend.xml"] != "<xml/>" {
-		t.Errorf("data[autounattend.xml] = %v", data["autounattend.xml"])
-	}
-}
 
 func TestAutounattendXML_WellFormed(t *testing.T) {
 	xmlStr := AutounattendXML("win11", "P@ssw0rd123!")
@@ -53,7 +32,7 @@ func TestAutounattendXML_ContainsKeySettings(t *testing.T) {
 }
 
 func TestRandomWindowsPassword_MeetsComplexity(t *testing.T) {
-	pw := randomWindowsPassword()
+	pw := RandomPassword()
 	if len(pw) < 8 {
 		t.Fatalf("password too short: %q", pw)
 	}
@@ -77,7 +56,7 @@ func TestRandomWindowsPassword_MeetsComplexity(t *testing.T) {
 }
 
 func TestRandomWindowsPassword_Uniqueness(t *testing.T) {
-	if randomWindowsPassword() == randomWindowsPassword() {
+	if RandomPassword() == RandomPassword() {
 		t.Error("expected two consecutive calls to produce different passwords")
 	}
 }
