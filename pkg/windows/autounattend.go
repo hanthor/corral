@@ -1,4 +1,4 @@
-package kubevirt
+package windows
 
 import (
 	"crypto/rand"
@@ -6,12 +6,12 @@ import (
 	"math/big"
 )
 
-// randomWindowsPassword generates a password meeting Windows' default
+// RandomPassword generates a password meeting Windows' default
 // complexity policy (3 of 4 character classes, min length) — corral's
 // existing randomPassword() is lowercase+digits only, which Windows'
 // local security policy rejects even for a scripted AdministratorPassword
 // in an unattend file.
-func randomWindowsPassword() string {
+func RandomPassword() string {
 	const (
 		lower = "abcdefghijklmnopqrstuvwxyz"
 		upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -52,27 +52,6 @@ func randomWindowsPassword() string {
 // presented as a `cdrom` device gets packaged into a real ISO9660 image by
 // KubeVirt itself, mounted read-only in the guest. One ConfigMap key,
 // named autounattend.xml, is all Setup needs to find at that CD-ROM's root.
-
-// AutounattendConfigMapName is the ConfigMap (and CD-ROM volume) name for
-// a given Windows VM's answer file.
-func AutounattendConfigMapName(vmName string) string { return vmName + "-autounattend" }
-
-// GenerateAutounattendConfigMap wraps xml as the ConfigMap KubeVirt will
-// package into an ISO9660 CD-ROM. The key name matters: Windows Setup
-// looks for a file literally named "autounattend.xml" at the media root.
-func GenerateAutounattendConfigMap(vmName, ns, xml string) map[string]any {
-	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      AutounattendConfigMapName(vmName),
-			"namespace": ns,
-		},
-		"data": map[string]any{
-			"autounattend.xml": xml,
-		},
-	}
-}
 
 // AutounattendXML renders a minimal, working answer file: wipe the boot
 // disk and create a standard UEFI/GPT layout (EFI system partition, MSR,

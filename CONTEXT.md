@@ -146,6 +146,37 @@ backend that tried and failed is a 502.
 (the `auto-` prefix), oldest first, and is scoped by the instance reference —
 so two contexts running a same-named instance prune independently.
 
+### Windows guests
+
+Windows needs three things no other guest does, and each is delivered
+differently per backend (`pkg/windows`):
+
+| | Firmware | Drivers | Answer file |
+|---|---|---|---|
+| kubevirt | cluster-provided UEFI + TPM | virtio-win containerdisk | ConfigMap presented as a CD-ROM |
+| libvirt | `<os firmware='efi'>` + emulated TPM 2.0 (swtpm) | virtio-win ISO as a second CD-ROM | an ISO Corral builds on the host |
+| incus | `security.secureboot` + Incus's own TPM | **slipstreamed** into the installer image | slipstreamed alongside |
+
+Incus is the outlier: a VM gets one CD-ROM, so there is nowhere to attach a
+driver disc during Setup. The upstream answer is `distrobuilder
+repack-windows`, which Corral drives — refusing with the exact command when
+distrobuilder is absent, rather than producing an installer that cannot see
+its own disk.
+
+Getting firmware wrong does not fail fast. Windows Setup runs for forty
+minutes and then refuses at a compatibility check that says nothing about
+libvirt, so `corral windows requirements` reports what a backend needs
+*before* anything is created, and the adapters declare it as data rather than
+burying it in conditionals.
+
+`<os firmware='efi'>` is deliberate over a hardcoded OVMF path: the path
+differs across distributions and a wrong one fails with a message about a
+missing file rather than about firmware.
+
+The virtio-win ISO comes from the Fedora virt group's stable channel, the same
+artifact Red Hat ships with RHEL. Corral does not mirror it — pointing at
+upstream means a user can verify what they are downloading.
+
 ### Device passthrough
 
 Handing a host device — usually a GPU — to a guest, through `pkg/device`'s
