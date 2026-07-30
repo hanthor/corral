@@ -146,6 +146,35 @@ backend that tried and failed is a 502.
 (the `auto-` prefix), oldest first, and is scoped by the instance reference —
 so two contexts running a same-named instance prune independently.
 
+### Device passthrough
+
+Handing a host device — usually a GPU — to a guest, through `pkg/device`'s
+adapter seam. Backends model it differently and the difference is structural:
+
+| Backend | Discovery | Attachment |
+|---|---|---|
+| libvirt | `virsh nodedev-list --cap pci` + `nodedev-dumpxml` | `<hostdev managed='yes'>` by PCI address |
+| incus | `GET /1.0/resources` | `incus config device add … gpu pci=…` (or `pci address=…`) |
+| kubevirt | node allocatable extended resources | `spec.domain.devices.gpus` by **resource name**, not address |
+| qemu | — | unsupported: Corral's local backend has no vfio wiring |
+
+KubeVirt is the odd one out: devices are allowlisted cluster-wide in the
+KubeVirt CR and advertised by a device plugin, so a VM attaches a *resource
+name* and no PCI address exists to speak of. `corral gpu enable` edits that
+allowlist and is KubeVirt-only by nature.
+
+This is the most destructive thing Corral does, so mutation is deliberately
+conservative. Every attachment surfaces its consequences **before** it happens
+— restart required, live migration blocked, host loses the device, guest gains
+DMA — and `corral gpu attach` asks for confirmation. Passing through the host's
+**boot display** (`/sys/bus/pci/devices/<addr>/boot_vga`) is refused outright,
+by a check in the shared package rather than per adapter: it would leave the
+machine with no console, recoverable only by physical access.
+
+`managed='yes'` on libvirt is deliberate — the device is unbound from the host
+driver when the domain starts and rebound when it stops, rather than being
+taken away from the host while the guest is off.
+
 ### Export
 
 Copying an instance's disk out, through `pkg/export`'s adapter seam. Backends

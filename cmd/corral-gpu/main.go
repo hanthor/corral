@@ -1,22 +1,65 @@
 // corral-gpu is the GPU/PCI-passthrough Corral plugin: it discovers
-// passthrough-capable devices, registers them in the KubeVirt CR
-// (permittedHostDevices), and attaches them to VMs (spec.domain.devices.gpus).
-// Installed via the marketplace (`corral plugin install gpu`) and invoked as
-// `corral gpu`.
+// passthrough-capable devices and attaches them to instances, on KubeVirt,
+// libvirt, or Incus (#129). Installed via the marketplace
+// (`corral plugin install gpu`) and invoked as `corral gpu`.
+//
+// Discovery and attachment go through pkg/device. `enable` stays KubeVirt-only
+// because it edits the KubeVirt CR's permittedHostDevices allowlist, which has
+// no libvirt or Incus counterpart — those backends attach a PCI address
+// directly, with no cluster-level allowlist in between.
+//
+// Attachment is the most destructive thing Corral does, so it prints what will
+// happen and asks first. --yes skips the prompt for scripting; nothing skips
+// the refusal to pass through the host's boot display.
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
+	"github.com/tuna-os/corral/pkg/device"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
+	"github.com/tuna-os/corral/pkg/types"
 )
+
+// target resolves the Corral context these commands act on.
+func target(contextName string) (config.ContextConfig, error) {
+	if contextName == "" {
+		return config.DefaultContext(), nil
+	}
+	found, ok := config.FindContext(contextName)
+	if !ok {
+		return config.ContextConfig{}, fmt.Errorf("unknown context %q (see corral context ls)", contextName)
+	}
+	return found, nil
+}
+
+// confirm prints what an attachment will do and waits for agreement. The
+// acceptance criteria ask for restart/migration/security implications to be
+// surfaced before mutation — printing them after would be no use to anyone.
+func confirm(dev device.Device, consequences []device.Consequence, assumeYes bool) error {
+	fmt.Fprintf(os.Stderr, "\nAbout to pass through %s (%s)\n", dev.ID, dev.Description)
+	for _, c := range consequences {
+		fmt.Fprintf(os.Stderr, "  • %s\n", c)
+	}
+	if assumeYes {
+		return nil
+	}
+	fmt.Fprint(os.Stderr, "\nProceed? [y/N] ")
+	var answer string
+	fmt.Scanln(&answer)
+	if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+		return fmt.Errorf("cancelled")
+	}
+	return nil
+}
 
 var runner shell.Runner = shell.Real{}
 
@@ -211,34 +254,70 @@ func detachGPU(vm, ns, name string) error {
 
 // ── CLI ───────────────────────────────────────────────────────────
 
+// instanceRef builds the canonical reference for the instance a command names.
+func instanceRef(ctx config.ContextConfig, name, namespace string) types.InstanceRef {
+	ref := types.InstanceRef{Backend: ctx.Backend, Context: ctx.Context, Name: name}
+	if ctx.Backend == "kubevirt" {
+		ref.Namespace = namespace
+	}
+	return ref
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 func main() {
-	if sdk.HandleMetadata(sdk.Metadata{Name: "gpu", Version: "0.1.0", Description: "KubeVirt GPU and PCI passthrough", Capabilities: []string{"cli-command", "gpu"}, Permissions: []string{"mutate KubeVirt configuration and VMs"}, SupportedBackends: []string{"kubevirt"}}) {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "gpu", Version: "0.2.0", Description: "GPU and PCI passthrough", Capabilities: []string{"cli-command", "gpu"}, Permissions: []string{"enumerate host PCI devices", "bind host devices to guests (removes them from the host)", "mutate KubeVirt configuration and instance definitions"}, SupportedBackends: []string{"kubevirt", "libvirt", "incus"}}) {
 		return
 	}
 	var namespace string
 
+	var contextName string
+	var assumeYes bool
+
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "Show passthrough-capable device resources and what KubeVirt permits",
+		Short: "Show passthrough-capable devices in the selected context",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			nodes, err := nodeDeviceResources()
+			ctx, err := target(contextName)
 			if err != nil {
 				return err
 			}
-			if len(nodes) == 0 {
-				fmt.Println("no device-plugin resources found on any node")
-			} else {
-				names := make([]string, 0, len(nodes))
-				for n := range nodes {
-					names = append(names, n)
+			adapter, err := device.For(ctx.Backend)
+			if err != nil {
+				return err
+			}
+			devices, err := adapter.List(ctx.Context)
+			if err != nil {
+				return err
+			}
+			if len(devices) == 0 {
+				fmt.Printf("no passthrough-capable devices found in context %q (%s)\n", ctx.Name, ctx.Backend)
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "DEVICE\tCLASS\tIDS\tDRIVER\tNODE\tDESCRIPTION")
+			for _, d := range devices {
+				note := d.Description
+				if d.BootDisplay {
+					note += "  [host boot display — cannot be passed through]"
 				}
-				sort.Strings(names)
-				for _, n := range names {
-					fmt.Printf("%s:\n", n)
-					for res, qty := range nodes[n] {
-						fmt.Printf("  %s: %s\n", res, qty)
-					}
+				ids := d.Vendor
+				if d.Product != "" {
+					ids += ":" + d.Product
 				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					d.ID, d.Class, orDash(ids), orDash(d.Driver), orDash(d.Node), note)
+			}
+			w.Flush()
+
+			// The KubeVirt allowlist is a cluster concept with no counterpart
+			// elsewhere, so it is only shown where it exists.
+			if ctx.Backend != "kubevirt" {
+				return nil
 			}
 			cur, err := currentPermitted()
 			if err != nil {
@@ -261,8 +340,16 @@ func main() {
 	var vendor, resource string
 	enable := &cobra.Command{
 		Use:   "enable --vendor <vid:did> --resource <vendor.com/name>",
-		Short: "Permit a PCI device for passthrough in the KubeVirt CR",
+		Short: "Permit a PCI device for passthrough in the KubeVirt CR (KubeVirt only)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := target(contextName)
+			if err != nil {
+				return err
+			}
+			if ctx.Backend != "kubevirt" {
+				return fmt.Errorf("`enable` edits the KubeVirt allowlist, which the %s backend does not have — "+
+					"attach a device directly with `corral gpu attach`", ctx.Backend)
+			}
 			if vendor == "" || resource == "" {
 				return fmt.Errorf("--vendor (e.g. 1002:744c) and --resource (e.g. amd.com/gpu) are required")
 			}
@@ -274,39 +361,116 @@ func main() {
 
 	var gpuName string
 	attach := &cobra.Command{
-		Use:   "attach <vm> --device <resourceName>",
-		Short: "Attach a permitted GPU/device to a VM",
+		Use:   "attach <instance> --device <id>",
+		Short: "Attach a passthrough device to an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			device, _ := cmd.Flags().GetString("device")
-			if device == "" {
-				return fmt.Errorf("--device is required (e.g. amd.com/gpu)")
+			deviceID, _ := cmd.Flags().GetString("device")
+			if deviceID == "" {
+				return fmt.Errorf("--device is required (see `corral gpu list`)")
 			}
-			return attachGPU(args[0], namespace, device, gpuName)
+			ctx, err := target(contextName)
+			if err != nil {
+				return err
+			}
+			adapter, err := device.For(ctx.Backend)
+			if err != nil {
+				return err
+			}
+			// Resolve against discovery rather than trusting the flag: that is
+			// what supplies the boot-display flag and the current host driver,
+			// and both change what happens next.
+			devices, err := adapter.List(ctx.Context)
+			if err != nil {
+				return err
+			}
+			var dev device.Device
+			for _, d := range devices {
+				if d.ID == deviceID || d.Address == deviceID {
+					dev = d
+					break
+				}
+			}
+			if dev.ID == "" {
+				return fmt.Errorf("no device %q in context %q — see `corral gpu list`", deviceID, ctx.Name)
+			}
+			name := gpuName
+			if name == "" {
+				name = "gpu0"
+			}
+			if err := confirm(dev, adapter.Consequences(dev), assumeYes); err != nil {
+				return err
+			}
+			ref := instanceRef(ctx, args[0], namespace)
+			if err := adapter.Attach(ref, dev, name); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "attached %s to %s as %q — restart it to take effect\n", dev.ID, ref.String(), name)
+			return nil
 		},
 	}
-	attach.Flags().String("device", "", "Device resource name (see `corral gpu list`)")
-	attach.Flags().StringVar(&gpuName, "name", "", "Device name inside the VM (default gpuN)")
+	attach.Flags().String("device", "", "Device ID or PCI address (see `corral gpu list`)")
+	attach.Flags().StringVar(&gpuName, "name", "", "Device name inside the instance (default gpu0)")
+	attach.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation prompt")
 
 	detach := &cobra.Command{
-		Use:   "detach <vm> --name <gpuN>",
-		Short: "Detach a GPU/device from a VM",
+		Use:   "detach <instance> --name <name>",
+		Short: "Detach a passthrough device from an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if gpuName == "" {
-				return fmt.Errorf("--name is required")
+				return fmt.Errorf("--name is required (see `corral gpu attached`)")
 			}
-			return detachGPU(args[0], namespace, gpuName)
+			ctx, err := target(contextName)
+			if err != nil {
+				return err
+			}
+			adapter, err := device.For(ctx.Backend)
+			if err != nil {
+				return err
+			}
+			return adapter.Detach(instanceRef(ctx, args[0], namespace), gpuName)
 		},
 	}
 	detach.Flags().StringVar(&gpuName, "name", "", "Device name to remove")
+
+	attached := &cobra.Command{
+		Use:   "attached <instance>",
+		Short: "Show the devices currently attached to an instance",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := target(contextName)
+			if err != nil {
+				return err
+			}
+			adapter, err := device.For(ctx.Backend)
+			if err != nil {
+				return err
+			}
+			list, err := adapter.Attached(instanceRef(ctx, args[0], namespace))
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				fmt.Println("no devices attached")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tDEVICE")
+			for _, a := range list {
+				fmt.Fprintf(w, "%s\t%s\n", a.Name, a.Device)
+			}
+			return w.Flush()
+		},
+	}
 
 	root := &cobra.Command{
 		Use:   "corral-gpu",
 		Short: "Corral plugin — discover and attach PCI/vGPU passthrough devices",
 	}
-	root.PersistentFlags().StringVarP(&namespace, "namespace", "n", kubevirt.DefaultNamespace, "Namespace")
-	root.AddCommand(list, enable, attach, detach)
+	root.PersistentFlags().StringVarP(&namespace, "namespace", "n", kubevirt.DefaultNamespace, "Namespace (KubeVirt only)")
+	root.PersistentFlags().StringVar(&contextName, "context", "", "Corral context to act on (default: the selected context)")
+	root.AddCommand(list, enable, attach, detach, attached)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
