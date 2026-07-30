@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
+	"github.com/tuna-os/corral/pkg/snapshot"
 	"github.com/tuna-os/corral/pkg/sources"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -266,41 +268,92 @@ func handleExpand(w http.ResponseWriter, r *http.Request) {
 	jsonResp(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// snapshotRef builds the canonical instance reference the snapshot adapters
+// dispatch on. The reserved namespaces name their backend; anything else is a
+// KubeVirt namespace, and ?context= selects among several clusters exactly as
+// it does for every other VM subresource.
+func snapshotRef(r *http.Request) types.InstanceRef {
+	ns, name := r.PathValue("ns"), r.PathValue("name")
+	context := r.URL.Query().Get("context")
+	switch ns {
+	case localNS:
+		return types.InstanceRef{Backend: "qemu", Name: name}
+	case "incus":
+		return types.InstanceRef{Backend: "incus", Context: context, Name: name}
+	case "libvirt":
+		return types.InstanceRef{Backend: "libvirt", Context: context, Name: name}
+	default:
+		return types.InstanceRef{Backend: "kubevirt", Context: context, Namespace: ns, Name: name}
+	}
+}
+
+// snapshotError maps an adapter failure onto a status. A backend that cannot
+// do this is a client-side 400 — retrying won't help and the message says why
+// — where a backend that tried and failed is a 502.
+func snapshotError(w http.ResponseWriter, err error) {
+	var unsupported *snapshot.Unsupported
+	if errors.As(err, &unsupported) {
+		errResp(w, http.StatusBadRequest, err)
+		return
+	}
+	errResp(w, http.StatusBadGateway, err)
+}
+
 // GET /api/vms/{ns}/{name}/snapshots
 func handleListSnapshots(w http.ResponseWriter, r *http.Request) {
-	ns, name := r.PathValue("ns"), r.PathValue("name")
-	snaps, err := kubeClient(r, ns).ListSnapshots(name)
+	ref := snapshotRef(r)
+	adapter, err := snapshot.For(ref)
 	if err != nil {
-		errResp(w, http.StatusBadGateway, err)
+		snapshotError(w, err)
 		return
+	}
+	snaps, err := adapter.List(ref)
+	if err != nil {
+		snapshotError(w, err)
+		return
+	}
+	if snaps == nil {
+		snaps = []snapshot.Snapshot{}
 	}
 	jsonResp(w, http.StatusOK, snaps)
 }
 
 // POST /api/vms/{ns}/{name}/snapshots  body: {name?}
 func handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
-	ns, name := r.PathValue("ns"), r.PathValue("name")
+	ref := snapshotRef(r)
 	var b struct {
 		Name string `json:"name"`
 	}
 	json.NewDecoder(r.Body).Decode(&b)
-	done := taskBegin("snapshot", ns+"/"+name)
-	snap, err := kubeClient(r, ns).Snapshot(name, b.Name)
-	done(err)
+	adapter, err := snapshot.For(ref)
 	if err != nil {
-		errResp(w, http.StatusInternalServerError, err)
+		snapshotError(w, err)
 		return
 	}
-	jsonResp(w, http.StatusOK, map[string]string{"name": snap})
+	done := taskBegin("snapshot", ref.Namespace+"/"+ref.Name)
+	snap, err := adapter.Create(ref, b.Name)
+	done(err)
+	if err != nil {
+		snapshotError(w, err)
+		return
+	}
+	// consistency travels with the response: the UI has to be able to tell a
+	// frozen-filesystem capture from a crash-consistent one.
+	jsonResp(w, http.StatusOK, snap)
 }
 
 // POST /api/vms/{ns}/{name}/snapshots/{snap}/restore
 func handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
-	ns, name, snap := r.PathValue("ns"), r.PathValue("name"), r.PathValue("snap")
-	done := taskBegin("restore snapshot", ns+"/"+name)
-	if err := kubeClient(r, ns).RestoreSnapshot(name, snap); err != nil {
+	ref := snapshotRef(r)
+	adapter, err := snapshot.For(ref)
+	if err != nil {
+		snapshotError(w, err)
+		return
+	}
+	done := taskBegin("restore snapshot", ref.Namespace+"/"+ref.Name)
+	if err := adapter.Restore(ref, r.PathValue("snap")); err != nil {
 		done(err)
-		errResp(w, http.StatusInternalServerError, err)
+		snapshotError(w, err)
 		return
 	}
 	done(nil)
@@ -309,11 +362,16 @@ func handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /api/vms/{ns}/{name}/snapshots/{snap}
 func handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
-	ns, snap := r.PathValue("ns"), r.PathValue("snap")
-	done := taskBegin("delete snapshot", ns+"/"+snap)
-	if err := kubeClient(r, ns).DeleteSnapshot(snap); err != nil {
+	ref, snap := snapshotRef(r), r.PathValue("snap")
+	adapter, err := snapshot.For(ref)
+	if err != nil {
+		snapshotError(w, err)
+		return
+	}
+	done := taskBegin("delete snapshot", ref.Namespace+"/"+snap)
+	if err := adapter.Delete(ref, snap); err != nil {
 		done(err)
-		errResp(w, http.StatusInternalServerError, err)
+		snapshotError(w, err)
 		return
 	}
 	done(nil)

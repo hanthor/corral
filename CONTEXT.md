@@ -119,6 +119,33 @@ other local metadata. Live backend inventory is authoritative for existence;
 the registry retains credentials and creation metadata and reads legacy
 name-keyed entries for migration compatibility.
 
+### Snapshot
+
+A point-in-time capture of an instance, taken through the backend's own
+mechanism: KubeVirt `VirtualMachineSnapshot`, `virsh snapshot-*`, `incus
+snapshot`, or a qcow2 internal snapshot via `qemu-img`. `pkg/snapshot` is the
+adapter seam (`snapshot.For(ref)`); plugins consume it rather than reaching for
+a backend directly.
+
+Every snapshot reports its **consistency**, because the backends genuinely
+differ and the difference decides whether a restore boots cleanly:
+
+- **offline** — the instance was stopped. Nothing was in flight.
+- **filesystem** — the guest filesystem was frozen for the capture. KubeVirt
+  does this itself when the guest agent is connected.
+- **crash** — captured live with nothing quiesced; restoring is equivalent to
+  booting after a power cut.
+
+Backends refuse rather than degrade silently: the local QEMU adapter will not
+snapshot a running VM (qemu-img writing into a disk the guest has open corrupts
+it) or a raw disk, and reports both as a typed `*snapshot.Unsupported` carrying
+the remedy. A refusal is a 400 in the API — retrying cannot help — where a
+backend that tried and failed is a 502.
+
+**Retention** (`snapshot.Prune`) only ever deletes snapshots a schedule created
+(the `auto-` prefix), oldest first, and is scoped by the instance reference —
+so two contexts running a same-named instance prune independently.
+
 ### Plugin
 
 A krew-style extension binary (`corral-<name>`) installed via
