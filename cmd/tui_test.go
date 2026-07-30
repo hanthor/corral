@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/tuna-os/corral/pkg/demo"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -35,21 +35,21 @@ func TestTUI_ModelInitializationAndNavigation(t *testing.T) {
 	}
 
 	// Test pressing Enter on selected item opens actions menu
-	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newModel, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	updated := newModel.(tuiModel)
 	if updated.state != "actions" {
 		t.Errorf("state after Enter = %q, want 'actions'", updated.state)
 	}
 
 	// Test Esc key returns to list state
-	backModel, _ := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	backModel, _ := updated.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	backUpdated := backModel.(tuiModel)
 	if backUpdated.state != "list" {
 		t.Errorf("state after Esc = %q, want 'list'", backUpdated.state)
 	}
 
 	// Test Doctor view navigation ('d' key)
-	docModel, _ := backUpdated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	docModel, _ := backUpdated.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	docUpdated := docModel.(tuiModel)
 	if docUpdated.state != "doctor" {
 		t.Errorf("state after 'd' = %q, want 'doctor'", docUpdated.state)
@@ -81,7 +81,7 @@ func TestTUI_RenderView(t *testing.T) {
 	m.width = 120
 	m.height = 40
 
-	rendered := m.View()
+	rendered := m.render()
 	if !strings.Contains(rendered, "web-prod") {
 		t.Errorf("TUI View() output missing expected VM item: %s", rendered)
 	}
@@ -99,7 +99,7 @@ func TestTUI_NarrowTerminalWidth(t *testing.T) {
 		t.Errorf("expected recorded window size 40x24, got %dx%d", updated.width, updated.height)
 	}
 
-	rendered := updated.View()
+	rendered := updated.render()
 	if rendered == "" {
 		t.Error("expected non-empty render output for narrow terminal")
 	}

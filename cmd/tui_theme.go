@@ -7,93 +7,134 @@ package cmd
 // survives a palette change; `lipgloss.Color("204")` scattered through a View
 // does not.
 //
-// Every colour is adaptive. A terminal with a light background gets a darker
-// variant, because the previous palette — grey 240 on whatever the user had —
+// Colours adapt to the terminal's background. A light terminal gets darker
+// variants, because the previous palette — grey 240 on whatever the user had —
 // was close to unreadable on a light theme, and a fleet tool that cannot be
 // read on a projector is a fleet tool nobody demos.
+//
+// lipgloss v2 removed AdaptiveColor, and deliberately: resolving a colour used
+// to hide a terminal query behind what looked like a constant. Now the
+// background is asked for once, over the Bubble Tea event loop, and a theme is
+// built from the answer. That is why every style lives on a struct rather than
+// in a package-level var — the values do not exist until the terminal has
+// replied.
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/tuna-os/corral/pkg/types"
 )
 
 // ── palette ───────────────────────────────────────────────────────
 
-var (
-	// Brand and structure.
-	colPrimary = lipgloss.AdaptiveColor{Light: "#7D2E68", Dark: "#F778BA"}
-	colAccent  = lipgloss.AdaptiveColor{Light: "#0550AE", Dark: "#79C0FF"}
-	colBorder  = lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"}
-	colFocus   = lipgloss.AdaptiveColor{Light: "#7D2E68", Dark: "#F778BA"}
+// palette holds every colour the TUI uses, already resolved for one
+// background. lipgloss.LightDark picks between the pair.
+type palette struct {
+	primary, accent, border, focus color.Color
+	text, muted, subtle            color.Color
+	ok, warn, danger, pending      color.Color
+	headerFG                       color.Color
+	kubevirt, qemu, incus, libvirt color.Color
+}
 
-	// Text.
-	colText   = lipgloss.AdaptiveColor{Light: "#1F2328", Dark: "#E6EDF3"}
-	colMuted  = lipgloss.AdaptiveColor{Light: "#656D76", Dark: "#8B949E"}
-	colSubtle = lipgloss.AdaptiveColor{Light: "#8C959F", Dark: "#6E7681"}
+func newPalette(isDark bool) palette {
+	pick := lipgloss.LightDark(isDark)
+	return palette{
+		primary: pick(lipgloss.Color("#7D2E68"), lipgloss.Color("#F778BA")),
+		accent:  pick(lipgloss.Color("#0550AE"), lipgloss.Color("#79C0FF")),
+		border:  pick(lipgloss.Color("#D0D7DE"), lipgloss.Color("#30363D")),
+		focus:   pick(lipgloss.Color("#7D2E68"), lipgloss.Color("#F778BA")),
 
-	// State. These carry meaning, so they are never reused for decoration.
-	colOK      = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
-	colWarn    = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
-	colDanger  = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
-	colPending = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"}
-)
+		text:   pick(lipgloss.Color("#1F2328"), lipgloss.Color("#E6EDF3")),
+		muted:  pick(lipgloss.Color("#656D76"), lipgloss.Color("#8B949E")),
+		subtle: pick(lipgloss.Color("#8C959F"), lipgloss.Color("#6E7681")),
 
-// backendColour gives each backend its own hue, the way k9s colours resource
-// kinds: a mixed fleet is easier to read when "which system is this on" is a
-// colour rather than a word you have to find.
-func backendColour(backend string) lipgloss.TerminalColor {
-	switch backend {
+		// State colours carry meaning, so they are never reused for decoration.
+		ok:      pick(lipgloss.Color("#1A7F37"), lipgloss.Color("#3FB950")),
+		warn:    pick(lipgloss.Color("#9A6700"), lipgloss.Color("#D29922")),
+		danger:  pick(lipgloss.Color("#CF222E"), lipgloss.Color("#F85149")),
+		pending: pick(lipgloss.Color("#0969DA"), lipgloss.Color("#58A6FF")),
+
+		headerFG: pick(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0D1117")),
+
+		// One hue per backend, the way k9s colours resource kinds: a mixed
+		// fleet is easier to read when "which system is this on" is a colour
+		// rather than a word you have to find.
+		kubevirt: pick(lipgloss.Color("#0550AE"), lipgloss.Color("#79C0FF")),
+		qemu:     pick(lipgloss.Color("#1A7F37"), lipgloss.Color("#3FB950")),
+		incus:    pick(lipgloss.Color("#BC4C00"), lipgloss.Color("#FFA657")),
+		libvirt:  pick(lipgloss.Color("#6639BA"), lipgloss.Color("#D2A8FF")),
+	}
+}
+
+func (p palette) backend(name string) color.Color {
+	switch name {
 	case "kubevirt":
-		return lipgloss.AdaptiveColor{Light: "#0550AE", Dark: "#79C0FF"}
+		return p.kubevirt
 	case "qemu":
-		return lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
+		return p.qemu
 	case "incus":
-		return lipgloss.AdaptiveColor{Light: "#BC4C00", Dark: "#FFA657"}
+		return p.incus
 	case "libvirt":
-		return lipgloss.AdaptiveColor{Light: "#6639BA", Dark: "#D2A8FF"}
+		return p.libvirt
 	default:
-		return colMuted
+		return p.muted
 	}
 }
 
 // ── styles ────────────────────────────────────────────────────────
 
-var (
-	stTitle = lipgloss.NewStyle().Bold(true).Foreground(colPrimary).Padding(0, 1)
-	stMuted = lipgloss.NewStyle().Foreground(colMuted)
-	stHelp  = lipgloss.NewStyle().Foreground(colSubtle)
-	stKey   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+// theme is every style the TUI draws with, resolved for one background.
+type theme struct {
+	p palette
 
-	stOK     = lipgloss.NewStyle().Foreground(colOK)
-	stWarn   = lipgloss.NewStyle().Foreground(colWarn)
-	stDanger = lipgloss.NewStyle().Foreground(colDanger)
+	title, muted, help, key   lipgloss.Style
+	ok, warn, danger          lipgloss.Style
+	panel, panelFocus         lipgloss.Style
+	header, headerDim, chip   lipgloss.Style
+	label, name, nameSelected lipgloss.Style
+}
 
-	// A panel that does not have focus. The focused one swaps the border
-	// colour, which is how lazygit shows you where your keys will land.
-	stPanel = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colBorder).
-		Padding(0, 1)
+func newTheme(isDark bool) theme {
+	p := newPalette(isDark)
+	return theme{
+		p:     p,
+		title: lipgloss.NewStyle().Bold(true).Foreground(p.primary).Padding(0, 1),
+		muted: lipgloss.NewStyle().Foreground(p.muted),
+		help:  lipgloss.NewStyle().Foreground(p.subtle),
+		key:   lipgloss.NewStyle().Bold(true).Foreground(p.accent),
 
-	stPanelFocus = stPanel.Copy().BorderForeground(colFocus)
+		ok:     lipgloss.NewStyle().Foreground(p.ok),
+		warn:   lipgloss.NewStyle().Foreground(p.warn),
+		danger: lipgloss.NewStyle().Foreground(p.danger),
 
-	// The header strip across the top: brand, context, fleet counts.
-	stHeader = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#0D1117"}).
-			Background(colPrimary).
-			Padding(0, 1)
+		// A panel without focus. The focused one swaps the border colour,
+		// which is how lazygit shows where your keys will land.
+		panel: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(p.border).
+			Padding(0, 1),
+		panelFocus: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(p.focus).
+			Padding(0, 1),
 
-	stHeaderDim = lipgloss.NewStyle().
-			Foreground(colMuted).
-			Padding(0, 1)
+		// The strip across the top: brand, context, fleet counts.
+		header: lipgloss.NewStyle().Bold(true).
+			Foreground(p.headerFG).Background(p.primary).Padding(0, 1),
+		headerDim: lipgloss.NewStyle().Foreground(p.muted).Padding(0, 1),
 
-	// A chip: a small rounded label for a capability or a count.
-	stChip = lipgloss.NewStyle().Padding(0, 1)
-)
+		// A chip: a small label for a capability or a backend.
+		chip: lipgloss.NewStyle().Padding(0, 1),
+
+		label:        lipgloss.NewStyle().Foreground(p.subtle).Bold(true),
+		name:         lipgloss.NewStyle().Foreground(p.text),
+		nameSelected: lipgloss.NewStyle().Bold(true).Foreground(p.text),
+	}
+}
 
 // ── status ────────────────────────────────────────────────────────
 
@@ -133,18 +174,18 @@ func classifyStatus(status string, running bool) runState {
 // statusDot renders the coloured indicator for a run state. The glyph differs
 // as well as the colour, so the meaning survives a monochrome terminal and a
 // reader who cannot separate red from green.
-func statusDot(state runState) string {
+func (t theme) statusDot(state runState) string {
 	switch state {
 	case stateRunning:
-		return lipgloss.NewStyle().Foreground(colOK).Render("●")
+		return lipgloss.NewStyle().Foreground(t.p.ok).Render("●")
 	case statePaused:
-		return lipgloss.NewStyle().Foreground(colWarn).Render("⏸")
+		return lipgloss.NewStyle().Foreground(t.p.warn).Render("⏸")
 	case stateBusy:
-		return lipgloss.NewStyle().Foreground(colPending).Render("◐")
+		return lipgloss.NewStyle().Foreground(t.p.pending).Render("◐")
 	case stateFailed:
-		return lipgloss.NewStyle().Foreground(colDanger).Render("✖")
+		return lipgloss.NewStyle().Foreground(t.p.danger).Render("✖")
 	default:
-		return lipgloss.NewStyle().Foreground(colSubtle).Render("○")
+		return lipgloss.NewStyle().Foreground(t.p.subtle).Render("○")
 	}
 }
 
@@ -152,13 +193,13 @@ func statusDot(state runState) string {
 
 // capabilityChips renders what an instance can actually do, so the operator
 // can see it without opening the actions menu and finding half of it absent.
-func capabilityChips(caps types.InstanceCapabilities) string {
+func (t theme) capabilityChips(caps types.InstanceCapabilities) string {
 	var chips []string
 	add := func(on bool, label string) {
 		if !on {
 			return
 		}
-		chips = append(chips, stChip.Foreground(colAccent).Render(label))
+		chips = append(chips, t.chip.Foreground(t.p.accent).Render(label))
 	}
 	add(caps.SSH, "ssh")
 	add(caps.VNC, "vnc")
@@ -167,17 +208,17 @@ func capabilityChips(caps types.InstanceCapabilities) string {
 	add(caps.Migrate, "migrate")
 	add(caps.GPU, "gpu")
 	if len(chips) == 0 {
-		return stMuted.Render("no remote access")
+		return t.muted.Render("no remote access")
 	}
 	return strings.Join(chips, "")
 }
 
 // backendChip names the backend in its own colour.
-func backendChip(backend string) string {
+func (t theme) backendChip(backend string) string {
 	if backend == "" {
 		backend = "qemu"
 	}
-	return stChip.Foreground(backendColour(backend)).Bold(true).Render(backend)
+	return t.chip.Foreground(t.p.backend(backend)).Bold(true).Render(backend)
 }
 
 // ── header ────────────────────────────────────────────────────────
@@ -212,27 +253,27 @@ type listRow struct{ state runState }
 // header renders the top strip: brand, selected context, and fleet counts.
 // Modelled on k9s, where the top of the screen always answers "where am I and
 // how much is here" without the operator navigating anywhere.
-func header(width int, context string, counts fleetCounts, refreshing bool, spinner string) string {
-	brand := stHeader.Render("🤠 CORRAL")
+func (t theme) headerBar(width int, context string, counts fleetCounts, refreshing bool, spinner string) string {
+	brand := t.header.Render("🤠 CORRAL")
 
 	ctx := context
 	if ctx == "" {
 		ctx = "all contexts"
 	}
-	scope := stHeaderDim.Render("context " + stKey.Render(ctx))
+	scope := t.headerDim.Render("context " + t.key.Render(ctx))
 
 	stats := strings.Join([]string{
-		lipgloss.NewStyle().Foreground(colOK).Render(fmt.Sprintf("● %d", counts.running)),
-		lipgloss.NewStyle().Foreground(colSubtle).Render(fmt.Sprintf("○ %d", counts.stopped)),
-		stMuted.Render(fmt.Sprintf("Σ %d", counts.total)),
+		lipgloss.NewStyle().Foreground(t.p.ok).Render(fmt.Sprintf("● %d", counts.running)),
+		lipgloss.NewStyle().Foreground(t.p.subtle).Render(fmt.Sprintf("○ %d", counts.stopped)),
+		t.muted.Render(fmt.Sprintf("Σ %d", counts.total)),
 	}, "  ")
 	if counts.other > 0 {
-		stats += "  " + lipgloss.NewStyle().Foreground(colPending).Render(fmt.Sprintf("◐ %d", counts.other))
+		stats += "  " + lipgloss.NewStyle().Foreground(t.p.pending).Render(fmt.Sprintf("◐ %d", counts.other))
 	}
 	if refreshing {
 		stats += "  " + spinner
 	}
-	right := stHeaderDim.Render(stats)
+	right := t.headerDim.Render(stats)
 
 	gap := width - lipgloss.Width(brand) - lipgloss.Width(scope) - lipgloss.Width(right)
 	if gap < 1 {
@@ -250,19 +291,19 @@ type keyHint struct{ key, label string }
 // statusBar renders the bindings that apply right now. lazygit and k9s both
 // do this, and it is the single thing that makes a dense TUI learnable: the
 // keys on screen are the keys that work in the state you are in.
-func statusBar(width int, hints []keyHint, notice string, noticeStyle lipgloss.Style) string {
+func (t theme) statusBar(width int, hints []keyHint, notice string, noticeStyle lipgloss.Style) string {
 	var parts []string
 	for _, h := range hints {
-		parts = append(parts, stKey.Render(h.key)+" "+stHelp.Render(h.label))
+		parts = append(parts, t.key.Render(h.key)+" "+t.help.Render(h.label))
 	}
-	bar := "  " + strings.Join(parts, stSeparator)
+	bar := "  " + strings.Join(parts, hintSeparator)
 	if notice != "" {
 		bar = "  " + noticeStyle.Render(notice) + "\n" + bar
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(bar)
 }
 
-const stSeparator = "  ·  "
+const hintSeparator = "  ·  "
 
 // statusWords strips the glyph a backend puts in front of its own status
 // string. pkg/qemu reports "● Running" and pkg/kubevirt "○ Stopped"; the list

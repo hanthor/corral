@@ -788,7 +788,7 @@ func TestActionsListItems_IncludesClone(t *testing.T) {
 // ── TUI CT representation ────────────────────────────────────────
 
 func TestCtToItem_ShowsPhaseAndPrivilege(t *testing.T) {
-	item := ctToItem(ctpkg.CT{Name: "web1", Phase: "Running", CPU: 2, Mem: "1Gi", Privileged: true})
+	item := ctToItem(ctpkg.CT{Name: "web1", Phase: "Running", CPU: 2, Mem: "1Gi", Privileged: true}, newTheme(true))
 	if item.Title() != "[CT] web1" {
 		t.Errorf("Title() = %q", item.Title())
 	}
