@@ -88,14 +88,14 @@ jobs:
       # it is correct — virsh, incus, and qemu-img each really do what the
       # adapter believes. Each subtest skips if its backend is missing, so a
       # runner without one degrades instead of failing.
-      - name: Snapshot adapters against real backends
+      - name: Snapshot and export adapters against real backends
         run: |
-          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ | tee /tmp/snap-e2e.txt
+          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ ./pkg/export/ | tee /tmp/snap-e2e.txt
           # The subtests skip when their backend is missing, which keeps the
           # file runnable on a laptop — but this runner installs all three, so
           # a skip here means the test verified nothing and the green tick
           # would be lying. Fail on it.
-          for backend in QEMU Libvirt Incus; do
+          for backend in QEMU Libvirt Incus QEMUExport LibvirtExport IncusExport; do
             if grep -q "SKIP: TestE2E_${backend}\b" /tmp/snap-e2e.txt; then
               echo "::error::TestE2E_${backend} skipped on a runner that has that backend installed"
               exit 1

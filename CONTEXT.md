@@ -146,6 +146,35 @@ backend that tried and failed is a 502.
 (the `auto-` prefix), oldest first, and is scoped by the instance reference —
 so two contexts running a same-named instance prune independently.
 
+### Export
+
+Copying an instance's disk out, through `pkg/export`'s adapter seam. Backends
+produce genuinely different artifacts and the difference matters to whoever
+restores from one, so the format is named rather than flattened:
+
+| Backend | Formats (native first) | Route |
+|---|---|---|
+| kubevirt | `raw.gz`, `qcow2` | `virtctl vmexport` off the primary PVC |
+| qemu | `qcow2`, `raw.gz` | `qemu-img convert` off the VM's disk |
+| libvirt | `qcow2`, `raw.gz` | `virsh domblklist` → `qemu-img convert` |
+| incus | `incus-tar` | `incus export` — an instance archive, **not** a disk image; restorable only with `incus import` |
+
+Exports carry the same **consistency** vocabulary as snapshots. Local QEMU
+refuses a running VM outright (copying a disk the guest is writing to produces
+a torn image); libvirt cannot stop the domain on the caller's behalf, so it
+exports and discloses `crash`. libvirt also refuses a remote hypervisor whose
+disk files are not on this filesystem, rather than letting `qemu-img` fail with
+a baffling "no such file".
+
+Bulk data never relays through a peer when it doesn't have to: a peer export is
+a 307 to the peer's own URL, so the client fetches it directly. A token-gated
+peer keeps relaying, because a credential in a redirect the browser follows
+would leak.
+
+Credentials stay out of core. `pkg/export` writes a local file and knows
+nothing about object storage; `corral-backup` owns the rclone config and the
+permission declaration that goes with it.
+
 ### Schedule
 
 An instance's autostart/shutdown window, stored against its canonical
