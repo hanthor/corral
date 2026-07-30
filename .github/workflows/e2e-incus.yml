@@ -115,6 +115,22 @@ jobs:
             fi
           done
 
+      # The bootc targets, under their own build tag: this suite also contains a
+      # privileged `bootc install to-disk` that pulls a multi-gigabyte image, so
+      # only the import/create half runs here. The build half is verified on real
+      # hardware (see pkg/bootc/e2e_test.go) rather than on every push.
+      - name: Bootc targets against real backends
+        run: |
+          set -o pipefail
+          sudo -E env "PATH=$PATH" go test -count=1 -tags e2ebootc -timeout 10m -v \
+            -run 'TestE2E_QEMUTargetAdopts|TestE2E_LibvirtTarget' ./pkg/bootc/ | tee /tmp/bootc-e2e.txt
+          for name in QEMUTargetAdoptsTheBuiltDisk LibvirtTargetDomainIsAccepted; do
+            if grep -q "SKIP: TestE2E_${name}\b" /tmp/bootc-e2e.txt; then
+              echo "::error::TestE2E_${name} skipped on a runner that can run it"
+              exit 1
+            fi
+          done
+
       - name: Multi-backend web inventory
         run: |
           ./corral web --addr 127.0.0.1:8007 &
