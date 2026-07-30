@@ -14,7 +14,9 @@ func TestInstanceRefRoundTrip(t *testing.T) {
 }
 
 func TestCapabilitiesForBackend(t *testing.T) {
-	if got := CapabilitiesForBackend("incus"); !got.TTY || got.Snapshots {
+	// Snapshots became true for Incus with the backend adapters (#134) —
+	// `incus snapshot` was always there, Corral just couldn't reach it.
+	if got := CapabilitiesForBackend("incus"); !got.TTY || !got.Snapshots {
 		t.Fatalf("unexpected Incus capabilities: %+v", got)
 	}
 	if got := CapabilitiesForBackend("libvirt"); !got.VNC || got.RDP {
