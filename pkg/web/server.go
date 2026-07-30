@@ -172,9 +172,9 @@ func newMux() (http.Handler, error) {
 	mux.HandleFunc("POST /api/vms/{ns}/{name}/powerschedule", noLocal(handleSetPowerSchedule))
 	mux.HandleFunc("DELETE /api/vms/{ns}/{name}/powerschedule", noLocal(handleDeletePowerSchedule))
 	mux.HandleFunc("GET /api/vms/{ns}/{name}/snapshots", handleListSnapshots)
-	mux.HandleFunc("POST /api/vms/{ns}/{name}/snapshots", noLocal(handleCreateSnapshot))
-	mux.HandleFunc("DELETE /api/vms/{ns}/{name}/snapshots/{snap}", noLocal(handleDeleteSnapshot))
-	mux.HandleFunc("POST /api/vms/{ns}/{name}/snapshots/{snap}/restore", noLocal(handleRestoreSnapshot))
+	mux.HandleFunc("POST /api/vms/{ns}/{name}/snapshots", handleCreateSnapshot)
+	mux.HandleFunc("DELETE /api/vms/{ns}/{name}/snapshots/{snap}", handleDeleteSnapshot)
+	mux.HandleFunc("POST /api/vms/{ns}/{name}/snapshots/{snap}/restore", handleRestoreSnapshot)
 
 	wsServer := func(h websocket.Handler) http.Handler {
 		return websocket.Server{

@@ -83,6 +83,15 @@ jobs:
           grep -E '^incus-ci-vm[[:space:]]+incus' /tmp/fleet.txt
           grep -E '^libvirt-ci[[:space:]]+libvirt' /tmp/fleet.txt
 
+      # Snapshot adapters (#134) against the real tools. The fake-runner unit
+      # tests can only assert the command syntax hasn't changed; this asserts
+      # it is correct — virsh, incus, and qemu-img each really do what the
+      # adapter believes. Each subtest skips if its backend is missing, so a
+      # runner without one degrades instead of failing.
+      - name: Snapshot adapters against real backends
+        run: |
+          go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/
+
       - name: Multi-backend web inventory
         run: |
           ./corral web --addr 127.0.0.1:8007 &

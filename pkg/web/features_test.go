@@ -1024,8 +1024,12 @@ func TestHandleCreateSnapshot_Error(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 500 {
-		t.Errorf("expected 500 when apply fails, got %d", resp.StatusCode)
+	// 502: the backend was reached and refused. Snapshot create/restore/delete
+	// used to answer 500 here while list answered 502 for the same class of
+	// failure; the adapter reports all four the same way, and reserves 400 for
+	// a backend that cannot snapshot at all.
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("expected 502 when the backend rejects the snapshot, got %d", resp.StatusCode)
 	}
 }
 

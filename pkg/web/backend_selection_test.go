@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -141,5 +142,28 @@ func TestHandleListVMs_QemuOnlyDeploymentIsNotAnError(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("got %d, want 200 — body: %s", resp.StatusCode, string(body))
+	}
+}
+
+// Snapshots used to be KubeVirt-only: the three mutating routes were behind
+// noLocal and answered a flat "not supported for local QEMU VMs". They now
+// dispatch through the backend adapters (#134), so a local VM gets a real
+// answer — and when the backend genuinely can't, the refusal says why.
+func TestHandleSnapshots_LocalVMGetsABackendAnswer(t *testing.T) {
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	resp := mustGet(t, fx.Server.URL+"/api/vms/local/nosuchvm/snapshots")
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(body), "not supported for local QEMU VMs") {
+			t.Fatalf("still behind the blanket local refusal: %s", body)
+		}
+	}
+	// The VM doesn't exist, so this is an error either way — what matters is
+	// that it came from the local backend rather than from a route guard.
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("a nonexistent local VM reported snapshots")
 	}
 }
