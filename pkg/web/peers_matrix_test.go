@@ -524,3 +524,89 @@ func TestPeerConsole_FallsBackToPeerRelay(t *testing.T) {
 		t.Errorf("relay echoed %q, want %q", got, "rfb-hello")
 	}
 }
+
+// An export is gigabytes. Relaying it hop-by-hop doubles the bytes on the wire
+// and pins them in this process for the duration, for no benefit when the
+// client can reach the peer itself (#131).
+func TestPeer_BulkExportRedirectsInsteadOfRelaying(t *testing.T) {
+	isolatedPeerHome(t)
+	peer := newPeerStub(t, types.VM{Name: "desk", Namespace: "corral-vms", Backend: "kubevirt"})
+	if err := config.SetPeer("cluster-a", peer.URL); err != nil {
+		t.Fatal(err)
+	}
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	ns := listVMs(t, fx)[0]["namespace"].(string)
+
+	// Don't follow it: the redirect itself is what's under test.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(fx.Server.URL + "/api/vms/" + ns + "/desk/export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307 — the export was relayed through this server", resp.StatusCode)
+	}
+	if got, want := resp.Header.Get("Location"), peer.URL+"/api/vms/corral-vms/desk/export"; got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+// A token-gated peer keeps relaying: putting the credential in a redirect the
+// browser follows would leak it. Correctness over throughput.
+func TestPeer_BulkExportStillRelaysWhenAuthenticated(t *testing.T) {
+	isolatedPeerHome(t)
+	peer := newPeerStub(t, types.VM{Name: "desk", Namespace: "corral-vms", Backend: "kubevirt"})
+	if err := config.SetPeerWithToken("secure", peer.URL, "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	ns := listVMs(t, fx)[0]["namespace"].(string)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(fx.Server.URL + "/api/vms/" + ns + "/desk/export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTemporaryRedirect {
+		t.Fatal("redirected a token-gated peer — the credential would not travel with it")
+	}
+	if got := peer.authFor("/api/vms/corral-vms/desk/export"); got != "Bearer s3cret" {
+		t.Errorf("relayed export Authorization = %q, want the peer token", got)
+	}
+}
+
+// Non-bulk subresources must keep relaying: they carry the peer's credential
+// and are small enough that the extra hop costs nothing.
+func TestPeer_NonBulkSubresourcesStillRelay(t *testing.T) {
+	isolatedPeerHome(t)
+	peer := newPeerStub(t, types.VM{Name: "desk", Namespace: "corral-vms", Backend: "kubevirt"})
+	if err := config.SetPeer("cluster-a", peer.URL); err != nil {
+		t.Fatal(err)
+	}
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	ns := listVMs(t, fx)[0]["namespace"].(string)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(fx.Server.URL + "/api/vms/" + ns + "/desk/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTemporaryRedirect {
+		t.Error("redirected a small JSON subresource")
+	}
+}

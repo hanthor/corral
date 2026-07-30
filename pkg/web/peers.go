@@ -181,6 +181,22 @@ func parsePeerNamespace(ns string) (config.PeerConfig, string, bool) {
 	return config.PeerConfig{}, "", false
 }
 
+// bulkSubresources stream an instance's disk rather than a page of JSON. An
+// export is gigabytes; relaying it hop-by-hop doubles the bytes on the wire and
+// pins them in this process's buffers for the duration, for no benefit when the
+// client can reach the peer itself (#131).
+var bulkSubresources = []string{"/export"}
+
+// isBulk reports whether a proxied path streams bulk data.
+func isBulk(path string) bool {
+	for _, suffix := range bulkSubresources {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func proxyPeerVM(w http.ResponseWriter, r *http.Request, peer config.PeerConfig, remoteNS string) {
 	encodedPrefix := "/api/vms/" + url.PathEscape(r.PathValue("ns")) + "/" + url.PathEscape(r.PathValue("name"))
 	remotePrefix := "/api/vms/" + url.PathEscape(remoteNS) + "/" + url.PathEscape(r.PathValue("name"))
@@ -188,6 +204,15 @@ func proxyPeerVM(w http.ResponseWriter, r *http.Request, peer config.PeerConfig,
 	target := peer.URL + path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
+	}
+
+	// Send the client straight to the peer for bulk transfers. Only when the
+	// peer needs no credential from us: a token in a redirect the browser
+	// follows would leak it, so a token-gated peer keeps relaying — correctness
+	// over throughput.
+	if isBulk(path) && peer.Token == "" {
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+		return
 	}
 	req, err := newPeerRequest(r.Context(), peer, r.Method, target, r.Body)
 	if err != nil {

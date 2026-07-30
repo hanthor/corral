@@ -1,24 +1,36 @@
-// corral-backup is the S3/R2 backup Corral plugin: on-demand VM disk backups to
-// any rclone remote and restore back into a fresh disk. It reuses KubeVirt's
-// exporter to pull the disk, rclone to move it to object storage (the tuna-os
-// convention for R2/S3), and `virtctl image-upload` to restore via CDI.
+// corral-backup is the S3/R2 backup Corral plugin: on-demand instance backups
+// to any rclone remote, and restore back into a fresh disk. It pulls the disk
+// through pkg/export — so KubeVirt, libvirt, Incus, and local QEMU all work —
+// then rclone moves it to object storage (the tuna-os convention for R2/S3).
+// Restore is still KubeVirt-only, via `virtctl image-upload` into CDI.
 // Installed via the marketplace (`corral plugin install backup`) and invoked as
 // `corral backup …`.
+//
+// Credentials live here rather than in core: pkg/export writes a local file and
+// knows nothing about object storage, and this plugin owns the rclone config
+// and the permission declaration that goes with it.
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/cronops"
+	"github.com/tuna-os/corral/pkg/export"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/shell"
+	"github.com/tuna-os/corral/pkg/snapshot"
+	"github.com/tuna-os/corral/pkg/types"
 )
 
 // runner shells out to rclone/virtctl; swapped in tests.
@@ -30,10 +42,12 @@ var (
 	flagSrc       string
 	flagSize      string
 	flagKeepLocal bool
+	flagContext   string
+	flagFormat    string
 )
 
 func main() {
-	if sdk.HandleMetadata(sdk.Metadata{Name: "backup", Version: "0.2.0", Description: "KubeVirt disk backup and restore", Capabilities: []string{"cli-command", "backup"}, Permissions: []string{"execute kubectl and rclone", "read VM disks", "write object storage"}, SupportedBackends: []string{"kubevirt"}}) {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "backup", Version: "0.3.0", Description: "Instance disk backup and restore", Capabilities: []string{"cli-command", "backup"}, Permissions: []string{"execute kubectl, virsh, incus, qemu-img and rclone", "read instance disks", "write object storage"}, SupportedBackends: []string{"kubevirt", "libvirt", "incus", "qemu"}}) {
 		return
 	}
 	if err := rootCmd().Execute(); err != nil {
@@ -52,8 +66,37 @@ func rootCmd() *cobra.Command {
 			"`<remote>:<bucket>/<path>`.",
 	}
 	root.PersistentFlags().StringVarP(&flagNamespace, "namespace", "n", "", "VM namespace (default: corral's default)")
-	root.AddCommand(createCmd(), restoreCmd(), listCmd(), scheduleCmd(), unscheduleCmd(), schedulesCmd())
+	root.PersistentFlags().StringVar(&flagContext, "context", "", "Corral context the instance lives in (default: the selected context)")
+	root.AddCommand(createCmd(), restoreCmd(), listCmd(), formatsCmd(), scheduleCmd(), unscheduleCmd(), schedulesCmd())
 	return root
+}
+
+// formatsCmd answers "what can this backend actually produce", which differs
+// enough between backends to be worth asking before scripting a backup: an
+// Incus export is an instance archive, not a bootable disk image.
+func formatsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "formats",
+		Short: "Show the export formats available for the selected context",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			ref, err := backupRef("placeholder")
+			if err != nil {
+				return err
+			}
+			adapter, err := export.For(ref)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s: ", ref.Backend)
+			var names []string
+			for _, f := range adapter.Formats() {
+				names = append(names, string(f))
+			}
+			fmt.Println(strings.Join(names, ", ") + "  (first is the default)")
+			return nil
+		},
+	}
 }
 
 func ns() string {
@@ -65,8 +108,8 @@ func ns() string {
 
 func createCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "create <vm>",
-		Short: "Export a stopped VM's disk and upload it to the remote",
+		Use:   "create <instance>",
+		Short: "Export a stopped instance's disk and upload it to the remote",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runBackup(args[0])
@@ -74,6 +117,7 @@ func createCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&flagDest, "dest", "", "rclone destination dir, e.g. r2:backups/corral (required)")
 	c.Flags().BoolVar(&flagKeepLocal, "keep-local", false, "keep the local export file after upload")
+	c.Flags().StringVar(&flagFormat, "format", "", "Export format; defaults to the backend's native one (see `corral backup formats`)")
 	c.MarkFlagRequired("dest")
 	return c
 }
@@ -113,8 +157,34 @@ func listCmd() *cobra.Command {
 }
 
 // runBackup exports the VM disk locally then rclone-copies it to the remote.
+// backupRef resolves the instance to back up. A bare name means nothing
+// without a context once more than one backend is configured.
+func backupRef(name string) (types.InstanceRef, error) {
+	target := config.DefaultContext()
+	if flagContext != "" {
+		found, ok := config.FindContext(flagContext)
+		if !ok {
+			return types.InstanceRef{}, fmt.Errorf("unknown context %q (see corral context ls)", flagContext)
+		}
+		target = found
+	}
+	ref := types.InstanceRef{Backend: target.Backend, Context: target.Context, Name: name}
+	if target.Backend == "kubevirt" {
+		ref.Namespace = ns()
+	}
+	return ref, ref.Validate()
+}
+
 func runBackup(vm string) error {
 	if err := ensureRclone(); err != nil {
+		return err
+	}
+	ref, err := backupRef(vm)
+	if err != nil {
+		return err
+	}
+	adapter, err := export.For(ref)
+	if err != nil {
 		return err
 	}
 	tmp, err := os.MkdirTemp("", "corral-backup-")
@@ -124,25 +194,92 @@ func runBackup(vm string) error {
 	if !flagKeepLocal {
 		defer os.RemoveAll(tmp)
 	}
+
+	format, err := resolveFormat(adapter)
+	if err != nil {
+		return err
+	}
 	stamp := time.Now().UTC().Format("20060102-150405")
-	fname := fmt.Sprintf("%s-%s.img.gz", vm, stamp)
+	fname := fmt.Sprintf("%s-%s.%s", vm, stamp, extensionFor(format))
 	local := filepath.Join(tmp, fname)
 
-	fmt.Fprintf(os.Stderr, "exporting %s disk → %s …\n", vm, local)
-	if _, err := kubevirt.NewClient(ns()).Export(vm, "", local); err != nil {
-		return fmt.Errorf("export %s (is it stopped?): %w", vm, err)
+	// Ctrl-C during a multi-gigabyte export should stop it, not orphan it.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Fprintf(os.Stderr, "exporting %s → %s …\n", ref.String(), local)
+	result, err := adapter.Export(ctx, export.Request{Ref: ref, Dest: local, Format: format},
+		func(p export.Progress) {
+			if p.Total > 0 {
+				fmt.Fprintf(os.Stderr, "  %s (%s)\n", p.Stage, humanBytes(p.Total))
+				return
+			}
+			fmt.Fprintf(os.Stderr, "  %s …\n", p.Stage)
+		})
+	if err != nil {
+		return fmt.Errorf("export %s: %w", ref.String(), err)
+	}
+	// Consistency is part of the backup's meaning, so it is stated rather than
+	// left for whoever restores it to guess.
+	fmt.Fprintf(os.Stderr, "exported %s (%s, %s-consistent)\n",
+		result.Format, humanBytes(result.Bytes), result.Consistency)
+	if result.Consistency == snapshot.Crash {
+		fmt.Fprintf(os.Stderr, "  note: taken while running — equivalent to a power-cut image; "+
+			"stop the instance first for a clean backup\n")
 	}
 
 	dest := strings.TrimSuffix(flagDest, "/") + "/" + fname
 	fmt.Fprintf(os.Stderr, "uploading → %s …\n", dest)
-	if out, err := runner.Run("rclone", "copyto", local, dest); err != nil {
+	if out, err := runner.Run("rclone", "copyto", result.Path, dest); err != nil {
 		return fmt.Errorf("rclone copyto: %s", strings.TrimSpace(string(out)))
 	}
 	fmt.Printf("backed up %s → %s\n", vm, dest)
 	if flagKeepLocal {
-		fmt.Printf("local copy kept at %s\n", local)
+		fmt.Printf("local copy kept at %s\n", result.Path)
 	}
 	return nil
+}
+
+// resolveFormat validates --format against what the instance's backend can
+// actually produce, naming the alternatives when it cannot.
+func resolveFormat(adapter export.Adapter) (export.Format, error) {
+	if flagFormat == "" {
+		return "", nil // the adapter's native choice
+	}
+	for _, f := range adapter.Formats() {
+		if string(f) == flagFormat {
+			return f, nil
+		}
+	}
+	var names []string
+	for _, f := range adapter.Formats() {
+		names = append(names, string(f))
+	}
+	return "", fmt.Errorf("this backend cannot produce %q; it supports: %s", flagFormat, strings.Join(names, ", "))
+}
+
+func extensionFor(f export.Format) string {
+	switch f {
+	case export.Qcow2:
+		return "qcow2"
+	case export.IncusTar:
+		return "tar.gz"
+	default:
+		return "img.gz"
+	}
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // runRestore downloads a backup and uploads it into a new CDI-backed PVC.
