@@ -174,6 +174,12 @@ func (l Libvirt) DomainXML(spec Spec, diskPath, answerISO string) string {
 	}
 	// TPM 2.0 and a virtio NIC. tpm-crb is what Windows 11 expects; the
 	// emulator is swtpm, which libvirt starts alongside the domain.
+	//
+	// The console is VNC, so there is deliberately no spicevmc agent channel:
+	// libvirt refuses a domain that carries one without spice graphics
+	// ("chardev 'spicevmc' not supported without spice graphics"), and the
+	// channel would be dead weight anyway without a spice client at the other
+	// end.
 	b.WriteString(`    <tpm model='tpm-crb'>
       <backend type='emulator' version='2.0'/>
     </tpm>
@@ -184,7 +190,6 @@ func (l Libvirt) DomainXML(spec Spec, diskPath, answerISO string) string {
     <graphics type='vnc' port='-1' listen='127.0.0.1'/>
     <video><model type='qxl'/></video>
     <input type='tablet' bus='usb'/>
-    <channel type='spicevmc'><target type='virtio' name='com.redhat.spice.0'/></channel>
   </devices>
 </domain>
 `)

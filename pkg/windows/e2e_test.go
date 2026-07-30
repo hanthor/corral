@@ -128,8 +128,14 @@ func TestE2E_WindowsAnswerISO(t *testing.T) {
 
 	// Prefer a real reader over byte-poking: if a tool that understands ISO9660
 	// can list the file, Windows Setup will find it too.
+	//
+	// isoinfo needs -J: the plain ISO9660 directory only carries the 8.3 name
+	// (AUTOUNAT.XML;1), and it is the Joliet tree that holds the real
+	// autounattend.xml — which is the tree Windows reads. Asserting against
+	// Joliet is therefore both the accurate check and a check that the image
+	// has a Joliet tree at all.
 	for _, lister := range [][]string{
-		{"isoinfo", "-i", path, "-f"},
+		{"isoinfo", "-i", path, "-J", "-f"},
 		{"xorriso", "-indev", path, "-find", "/"},
 		{"7z", "l", path},
 		{"bsdtar", "-tf", path},
