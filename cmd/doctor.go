@@ -42,6 +42,12 @@ misconfigured. --fix reconciles the safe, config-only issues.`,
 			}
 		}
 		checks := doctor.RunContexts(contexts)
+		// Peers are part of the fleet the dashboard aggregates, so a fleet-wide
+		// diagnosis has to cover them. --context selects a compute context, and
+		// naming one means the caller is not asking about peers.
+		if rootContext == "" {
+			checks = append(checks, doctor.RunPeers(config.Peers())...)
+		}
 		anyFixable := false
 		failedRequired := false
 		lastTarget := ""

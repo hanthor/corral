@@ -220,3 +220,10 @@ var PortMap = map[string]int{
 
 // DefaultPorts are the ports offered in the edit menu.
 var DefaultPorts = []int{22, 3389, 5900, 80, 443}
+
+// PeerProtocol is the version of the Corral-to-Corral federation protocol this
+// build speaks. `corral web` advertises it on /api/v1/meta and `corral doctor`
+// compares a peer's against it, so it lives here rather than being written out
+// in both places — a peer diagnosed as compatible has to be one the aggregator
+// will actually federate with.
+const PeerProtocol = 1
