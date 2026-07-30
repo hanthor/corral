@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
 	"github.com/tuna-os/corral/pkg/incus"
@@ -35,6 +36,10 @@ func Enable() shell.Runner {
 	// Make the in-memory Incus remote an explicit inventory context. Production
 	// never invents an Incus target, while demo surfaces still exercise it.
 	os.Setenv("CORRAL_INCUS_REMOTE", "local")
+	// Likewise for KubeVirt, which production offers only when the host has a
+	// kubeconfig. The demo cluster is entirely in memory, so the demo fleet
+	// must not depend on whether this machine has ever run kubectl.
+	config.SetForceKubevirtContext(true)
 	d := newDemoCluster()
 	kubevirt.SetDefaultRunner(d)
 	kubevirt.SetPackageRunner(d)

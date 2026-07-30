@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -256,9 +257,17 @@ func statusFor(err error) int {
 func handleListVMs(w http.ResponseWriter, r *http.Request) {
 	result := fleet.List(r.Context())
 	vms := append(result.VMs, peerVMs()...)
-	if len(vms) == 0 && len(config.Peers()) == 0 && len(result.Errors) > 0 && len(result.Errors) == len(config.Contexts()) {
-		errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %v", result.Errors))
-		return
+	// Nothing to show and a remote backend that can't be reached is the "No
+	// cluster connected" case the dashboard renders setup guidance for, so it
+	// has to surface as an error rather than an empty fleet. A qemu-only
+	// deployment has no remote contexts at all (see config.Contexts) and so can
+	// never trip this; a failing local qemu listing alone never means "no
+	// cluster", which is why only remote errors count.
+	if len(vms) == 0 && len(config.Peers()) == 0 {
+		if bad := remoteErrors(result.Errors); bad != "" {
+			errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %s", bad))
+			return
+		}
 	}
 	if vms == nil {
 		vms = []types.VM{}
@@ -267,6 +276,26 @@ func handleListVMs(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Corral-Partial", "true")
 	}
 	jsonResp(w, http.StatusOK, vms)
+}
+
+// remoteErrors renders the listing errors that came from a remote (non-local)
+// context as a stable, sorted "name: message" list, or "" when every failure
+// was local. Sorted so the message doesn't churn across map iterations.
+func remoteErrors(errs map[string]string) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, c := range config.Contexts() {
+		if c.Backend == "qemu" {
+			continue
+		}
+		if msg, ok := errs[c.Name]; ok {
+			parts = append(parts, c.Name+": "+msg)
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
 }
 
 func handleInventory(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +456,7 @@ func handleCreateVM(w http.ResponseWriter, r *http.Request) {
 		ns = kubevirt.DefaultNamespace
 	}
 
-	target, err := resolveCreateTarget(req.Target)
+	target, err := resolveCreateTarget(req.Target, req)
 	if err != nil {
 		errResp(w, http.StatusBadRequest, err)
 		return
@@ -470,21 +499,53 @@ func handleContexts(w http.ResponseWriter, _ *http.Request) {
 	jsonResp(w, http.StatusOK, map[string]any{"default": config.DefaultContext().Name, "contexts": config.Contexts()})
 }
 
-func resolveCreateTarget(name string) (config.ContextConfig, error) {
+func resolveCreateTarget(name string, req createRequest) (config.ContextConfig, error) {
 	switch name {
 	case "":
-		// Backward compatibility for API clients predating named targets.
-		return config.DefaultContext(), nil
+		// Backward compatibility for API clients predating named targets. The
+		// default context is the right answer for a request the local backend
+		// can actually serve; a KubeVirt-shaped one still means the cluster,
+		// because createLocalVM silently ignores those fields and would fail
+		// with an unrelated "needs an ISO" message.
+		target := config.DefaultContext()
+		if target.Backend != "qemu" || !needsCluster(req) {
+			return target, nil
+		}
+		return clusterContext()
 	case "local":
 		return config.ContextConfig{Name: "local", Backend: "qemu"}, nil
 	case "cluster":
-		return config.DefaultContext(), nil
+		// Legacy alias, and the fallback the dashboard hardcodes when
+		// /api/contexts is unreachable: it has always meant the KubeVirt
+		// cluster and must never resolve to the local backend.
+		return clusterContext()
 	default:
 		if target, ok := config.FindContext(name); ok {
 			return target, nil
 		}
 		return config.ContextConfig{}, fmt.Errorf("unknown context %q", name)
 	}
+}
+
+// needsCluster reports whether a request uses fields only the KubeVirt backend
+// implements. createLocalVM reads ISO and Import and nothing else, so anything
+// listed here would otherwise be dropped on the floor.
+func needsCluster(req createRequest) bool {
+	return req.ContainerDisk != "" || req.PVC != "" || req.Bootc != "" ||
+		req.Image != "" || req.Windows
+}
+
+// clusterContext returns the KubeVirt context to create in.
+func clusterContext() (config.ContextConfig, error) {
+	if target, ok := config.FindContext("kubevirt"); ok && target.Backend == "kubevirt" {
+		return target, nil
+	}
+	for _, c := range config.Contexts() {
+		if c.Backend == "kubevirt" {
+			return c, nil
+		}
+	}
+	return config.ContextConfig{}, fmt.Errorf("no KubeVirt context is configured — name a target explicitly (see corral context ls)")
 }
 
 func handleVMAction(w http.ResponseWriter, r *http.Request) {

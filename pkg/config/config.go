@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,9 +63,16 @@ func Contexts() []ContextConfig {
 	// backend is also an explicit opt-in and preserves the old workflow.
 	var legacy []ContextConfig
 	// The active kubeconfig context has always been Corral's cluster target and
-	// remains discoverable without explicit migration. Incus/libvirt have no
-	// equivalent ubiquitous client default, so those require opt-in below.
-	legacy = append(legacy, ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: cfg.Kubevirt.Context})
+	// remains discoverable without explicit migration — but only when there is
+	// a kubeconfig to act on. A qemu-only or Incus-only host must not be handed
+	// a kubevirt target it can never reach, because every consumer of this list
+	// (fleet.List, doctor, the web dashboard) then reports a permanent failure
+	// for a backend the user never asked for. Incus/libvirt have no equivalent
+	// ubiquitous client default, so those require opt-in below.
+	if cfg.Kubevirt.Context != "" || cfg.Default.Backend == "kubevirt" ||
+		os.Getenv("CORRAL_KUBE_CONTEXT") != "" || forceKubevirt.Load() || KubeconfigPresent() {
+		legacy = append(legacy, ContextConfig{Name: "kubevirt", Backend: "kubevirt", Context: cfg.Kubevirt.Context})
+	}
 	if cfg.Incus.Remote != "" || cfg.Default.Backend == "incus" || os.Getenv("CORRAL_INCUS_REMOTE") != "" {
 		legacy = append(legacy, ContextConfig{Name: "incus", Backend: "incus", Context: IncusRemote()})
 	}
@@ -272,6 +280,41 @@ func RemovePeer(name string) error {
 	}
 	cfg.Peers = out
 	return Save(cfg)
+}
+
+// forceKubevirt makes Contexts offer the kubevirt target unconditionally.
+var forceKubevirt atomic.Bool
+
+// SetForceKubevirtContext declares that this process can reach a KubeVirt
+// cluster whatever the filesystem says. Demo mode is the caller: it replaces
+// every command runner with an in-memory cluster, so kubeconfig presence tells
+// us nothing about reachability, and without this the demo fleet would be empty
+// on a machine that has never run kubectl. Takes a value rather than latching,
+// so tests that enable demo mode can put the process back as they found it.
+func SetForceKubevirtContext(on bool) { forceKubevirt.Store(on) }
+
+// KubeconfigPresent reports whether a kubeconfig this host can actually read
+// exists — KUBECONFIG naming at least one readable file, or ~/.kube/config.
+// It is the "does this machine talk to a cluster at all" test; it says nothing
+// about whether that cluster is up or has KubeVirt installed.
+func KubeconfigPresent() bool {
+	if v := os.Getenv("KUBECONFIG"); v != "" {
+		for _, p := range filepath.SplitList(v) {
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, ".kube", "config"))
+	return err == nil
 }
 
 func KubeContext() string {

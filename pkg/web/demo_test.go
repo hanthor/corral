@@ -13,17 +13,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/registry"
 )
 
 func newDemoServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	// demo.Enable sets CORRAL_INCUS_REMOTE for the whole process, which would
+	// otherwise leave every later test in this package with an extra Incus
+	// context that nothing stubs. Claiming the variable first makes the test
+	// framework put it back afterwards.
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
 	EnableDemo()
 	tmpDir := t.TempDir()
 	store = registry.NewStoreAt(tmpDir + "/registry.json")
 	t.Cleanup(func() {
 		// Restore the seams so later tests in this package start clean.
+		config.SetForceKubevirtContext(false)
 		qemu.SetStateDirs("", "")
 		f := NewTestFixture()
 		f.Close()
