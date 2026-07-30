@@ -65,7 +65,7 @@ Access the Proxmox-style Web UI at `http://localhost:8006` or via `corral web`.
 
 ![Automated unified fleet capture](screenshots/generated/web-fleet.png)
 
-![Datacenter View](docs/screenshots/dashboard.png)
+![Datacenter View](screenshots/dashboard.png)
 
 #### Features:
 - **Datacenter Tree**: Navigate through all VMs, CTs, and Incus instances across local and cluster nodes.
@@ -74,7 +74,7 @@ Access the Proxmox-style Web UI at `http://localhost:8006` or via `corral web`.
 - **Mobile Responsive**: Manage your VM fleet from your mobile browser.
 - **Theme & Branding**: Customize accent colours, header branding, and inject custom CSS — via CLI flags, config file, or the built-in Settings page.
 
-![Mobile Dashboard](docs/screenshots/dashboard-mobile.png)
+![Mobile Dashboard](screenshots/dashboard-mobile.png)
 
 #### Theme & Branding
 
@@ -165,12 +165,12 @@ corral delete dev-vm
 Corral provides single-command remote access to guest displays and shells:
 
 #### In-Browser & Local VNC
-![VM Summary & VNC](docs/screenshots/vm-summary.png)
+![VM Summary & VNC](screenshots/vm-summary.png)
 
 - **VNC Display**: `corral viewer <vm-name>` opens a VNC session. In the Web UI, `noVNC` provides zero-install browser display access.
 - **Interactive TTY / SSH**: `corral ssh <vm-name>` or `corral tty <ct-name>` connects your terminal directly into guest shell namespaces (via SSH, `virtctl console`, or `incus exec`).
 
-![Local VM Framebuffer](docs/screenshots/local-vm-console.png)
+![Local VM Framebuffer](screenshots/local-vm-console.png)
 
 ---
 
