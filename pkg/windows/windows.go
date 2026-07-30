@@ -93,6 +93,23 @@ type Requirements struct {
 
 // ── answer-file media ─────────────────────────────────────────────
 
+// isoArgs are the options every ISO writer here is given.
+//
+//	-J            Joliet, which is what Windows normally reads for long names
+//	-r            Rock Ridge, so the file is also sane on Linux
+//	-iso-level 4  keeps the name untruncated in the *primary* ISO9660 tree
+//	-V UNATTEND   a volume label, purely so the medium is identifiable
+//
+// -iso-level 4 is the load-bearing one. With -J -r alone, inspecting a real
+// image shows the primary tree holding the 8.3-mangled "AUTOUNAT.XML;1" while
+// only Joliet carries the real name. Windows Setup does normally read Joliet,
+// so that arrangement usually works — but "usually" is doing a lot of work for
+// a failure whose symptom is an unattended install silently becoming an
+// interactive one, with no error anywhere. -iso-level 4 costs nothing and
+// puts AUTOUNATTEND.XML;1 in the primary tree too (Setup matches
+// case-insensitively), so neither tree can be the one that lets it down.
+var isoArgs = []string{"-J", "-r", "-iso-level", "4", "-V", "UNATTEND"}
+
 // isoTools are the ISO writers Corral will use to build the answer-file
 // medium, in preference order. Corral shells out rather than hand-rolling
 // ISO9660: a subtly malformed image fails inside Windows Setup, where there is
@@ -102,13 +119,13 @@ var isoTools = []struct {
 	args   func(out, dir string) []string
 }{
 	{"xorriso", func(out, dir string) []string {
-		return []string{"-as", "mkisofs", "-J", "-r", "-V", "UNATTEND", "-o", out, dir}
+		return append(append([]string{"-as", "mkisofs"}, isoArgs...), "-o", out, dir)
 	}},
 	{"genisoimage", func(out, dir string) []string {
-		return []string{"-J", "-r", "-V", "UNATTEND", "-o", out, dir}
+		return append(append([]string{}, isoArgs...), "-o", out, dir)
 	}},
 	{"mkisofs", func(out, dir string) []string {
-		return []string{"-J", "-r", "-V", "UNATTEND", "-o", out, dir}
+		return append(append([]string{}, isoArgs...), "-o", out, dir)
 	}},
 }
 

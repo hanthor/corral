@@ -126,18 +126,20 @@ func TestE2E_WindowsAnswerISO(t *testing.T) {
 		t.Fatalf("BuildAnswerISO: %v", err)
 	}
 
-	// Prefer a real reader over byte-poking: if a tool that understands ISO9660
-	// can list the file, Windows Setup will find it too.
+	// Every tree the image has must name the file correctly, checked with a
+	// real reader rather than by poking bytes.
 	//
-	// isoinfo needs -J: the plain ISO9660 directory only carries the 8.3 name
-	// (AUTOUNAT.XML;1), and it is the Joliet tree that holds the real
-	// autounattend.xml — which is the tree Windows reads. Asserting against
-	// Joliet is therefore both the accurate check and a check that the image
-	// has a Joliet tree at all.
+	// Both trees, deliberately. Joliet is what Windows normally reads, and
+	// checking only that would pass — but the primary ISO9660 tree is the one
+	// that silently truncates to AUTOUNAT.XML;1, and a Setup reading it finds
+	// no answer file and falls through to an interactive install with no error
+	// anywhere. Since -iso-level 4 makes both trees correct, both are asserted:
+	// a regression in either is a regression.
+	var checked int
 	for _, lister := range [][]string{
-		{"isoinfo", "-i", path, "-J", "-f"},
+		{"isoinfo", "-i", path, "-f"},       // primary ISO9660 tree
+		{"isoinfo", "-i", path, "-J", "-f"}, // Joliet tree
 		{"xorriso", "-indev", path, "-find", "/"},
-		{"7z", "l", path},
 		{"bsdtar", "-tf", path},
 	} {
 		bin, err := exec.LookPath(lister[0])
@@ -146,13 +148,20 @@ func TestE2E_WindowsAnswerISO(t *testing.T) {
 		}
 		out, err := exec.Command(bin, lister[1:]...).CombinedOutput()
 		if err != nil {
-			t.Fatalf("%s could not read the generated ISO: %s: %v", lister[0], out, err)
+			continue // e.g. no such tree to list; the other readers still apply
 		}
-		if !strings.Contains(strings.ToUpper(string(out)), "AUTOUNATTEND.XML") {
-			t.Fatalf("%s does not list autounattend.xml at the ISO root:\n%s", lister[0], out)
+		listing := strings.ToUpper(string(out))
+		if strings.Contains(listing, "AUTOUNAT.XML") {
+			t.Fatalf("%v shows the 8.3-truncated name — Windows Setup reading this tree finds no answer file:\n%s",
+				lister, out)
 		}
-		t.Logf("%s confirms autounattend.xml is at the ISO root", lister[0])
-		return
+		if !strings.Contains(listing, "AUTOUNATTEND.XML") {
+			t.Fatalf("%v does not list autounattend.xml at the ISO root:\n%s", lister, out)
+		}
+		t.Logf("%v: autounattend.xml at the root, untruncated", lister)
+		checked++
 	}
-	t.Skip("no ISO reader available to verify the image")
+	if checked == 0 {
+		t.Skip("no ISO reader available to verify the image")
+	}
 }

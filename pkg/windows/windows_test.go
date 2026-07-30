@@ -261,3 +261,28 @@ func TestEnsureVirtioISO_ExplainsItselfWithNoDownloader(t *testing.T) {
 		t.Errorf("error does not say where to get it: %v", err)
 	}
 }
+
+// The ISO writer must be asked for untruncated names in the primary tree, not
+// only in Joliet. Inspecting a real image shows that -J -r alone leaves the
+// primary ISO9660 tree with "AUTOUNAT.XML;1"; Windows Setup reading that tree
+// finds no answer file and falls through to an interactive install, with no
+// error to notice. -iso-level 4 costs nothing and removes the question.
+func TestISOArgs_RequestUntruncatedNames(t *testing.T) {
+	joined := strings.Join(isoArgs, " ")
+	for what, want := range map[string]string{
+		"Joliet, which Windows normally reads":                   "-J",
+		"an ISO level that keeps long names in the primary tree": "-iso-level 4",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ISO writer is not asked for %s (%q); args are %v", what, want, isoArgs)
+		}
+	}
+	// Every writer gets them, or which tool happens to be installed changes
+	// the artifact — the worst kind of environment-dependent bug.
+	for _, tool := range isoTools {
+		got := strings.Join(tool.args("/out.iso", "/src"), " ")
+		if !strings.Contains(got, "-iso-level 4") || !strings.Contains(got, "-J") {
+			t.Errorf("%s is invoked without the long-name options: %s", tool.binary, got)
+		}
+	}
+}
