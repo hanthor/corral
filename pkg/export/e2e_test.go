@@ -223,6 +223,14 @@ func TestE2E_IncusExport(t *testing.T) {
 	if result.Consistency != snapshot.Crash {
 		t.Errorf("consistency = %q; a running instance's export is crash-consistent", result.Consistency)
 	}
+	// "Backup" has to mean the data. --instance-only drops the instance's
+	// snapshots, not its rootfs, but the difference between a real archive and
+	// a few KB of metadata is exactly the mistake worth catching here — an
+	// Ubuntu rootfs is tens of megabytes at minimum.
+	const plausibleArchive = 1 << 20
+	if result.Bytes < plausibleArchive {
+		t.Errorf("archive is %d bytes — too small to contain the instance's filesystem", result.Bytes)
+	}
 	// Refusing a disk-image format is the whole point of the separate format.
 	if _, err := (Incus{}).Export(context.Background(),
 		Request{Ref: ref, Dest: dest, Format: Qcow2}, nil); err == nil {
