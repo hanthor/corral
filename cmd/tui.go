@@ -9,10 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/doctor"
@@ -43,6 +45,7 @@ var (
 type vmItem struct {
 	vm      types.VM
 	display string
+	state   runState
 }
 
 func (i vmItem) Title() string       { return i.vm.Name }
@@ -51,22 +54,24 @@ func (i vmItem) FilterValue() string {
 	return strings.Join([]string{i.vm.Name, i.vm.ID, i.vm.Backend, i.vm.Context, i.vm.Namespace, i.vm.Node, i.vm.IP}, " ")
 }
 
-func vmToItem(vm types.VM) vmItem {
+func vmToItem(vm types.VM, th theme) vmItem {
 	proxy := tuiProxyOff
 	if vm.VNC == "on" {
 		proxy = tuiProxyOn
 	} else if vm.VNC == "pending" {
 		proxy = "◐"
 	}
+	// Backend first and in its own colour, so a mixed fleet reads as groups
+	// rather than as a wall of identical rows.
 	display := fmt.Sprintf("%s  %s  ports:%s  %d CPU / %s",
-		vm.Status, vm.Backend, proxy, vm.CPU, vm.Mem)
+		th.backendChip(vm.Backend), th.muted.Render(statusWords(vm.Status)), proxy, vm.CPU, vm.Mem)
 	if vm.Node != "" && vm.Node != "—" {
-		display += "  " + vm.Node
+		display += "  " + th.muted.Render(vm.Node)
 	}
 	if vm.IP != "" {
-		display += "  " + vm.IP
+		display += "  " + lipgloss.NewStyle().Foreground(th.p.accent).Render(vm.IP)
 	}
-	return vmItem{vm: vm, display: display}
+	return vmItem{vm: vm, display: display, state: classifyStatus(vm.Status, vm.Running)}
 }
 
 // ── CT item for the list ────────────────────────────────────────────
@@ -81,21 +86,24 @@ func vmToItem(vm types.VM) vmItem {
 type ctItem struct {
 	ct      ct.CT
 	display string
+	state   runState
 }
 
 func (i ctItem) Title() string       { return "[CT] " + i.ct.Name }
 func (i ctItem) Description() string { return i.display }
 func (i ctItem) FilterValue() string { return i.ct.Name }
 
-func ctToItem(c ct.CT) ctItem {
+func ctToItem(c ct.CT, th theme) ctItem {
 	priv := ""
 	if c.Privileged {
 		priv = "  privileged"
 	}
 	return ctItem{
 		ct: c,
-		display: fmt.Sprintf("CT  %s  %d CPU / %s%s",
-			c.Phase, c.CPU, c.Mem, priv),
+		display: fmt.Sprintf("%s  %s  %d CPU / %s%s",
+			th.chip.Foreground(th.p.pending).Bold(true).Render("ct"),
+			th.muted.Render(statusWords(c.Phase)), c.CPU, c.Mem, priv),
+		state: classifyStatus(c.Phase, c.Ready),
 	}
 }
 
@@ -205,25 +213,43 @@ type tuiModel struct {
 	errors      map[string]string
 	refreshedAt time.Time
 	notice      string
+	noticeKind  string // "", "ok", "warn", "error" — drives the notice colour
 	showHelp    bool
+	spin        spinner.Model
+	busy        bool // an action is running; the header shows the spinner
+	busyLabel   string
+	// th is rebuilt when the terminal answers the background-colour query.
+	// lipgloss v2 removed AdaptiveColor, so a style cannot resolve until the
+	// background is known — see cmd/tui_theme.go.
+	th theme
 }
 
 func newTUIModel() tuiModel {
-	items, errs := loadTUIItems()
+	// A dark background is the starting assumption. The terminal is asked for
+	// the real answer in Init, and BackgroundColorMsg rebuilds the theme — see
+	// Update. lipgloss v2 has no AdaptiveColor to defer this for us.
+	th := newTheme(true)
+
+	items, errs := loadTUIItems(th)
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
-		items = append(items, ctToItem(c))
+		items = append(items, ctToItem(c, th))
 	}
 
-	l := list.New(items, vmItemDelegate{}, 0, 0)
+	l := list.New(items, vmItemDelegate{th: th}, 0, 0)
 	l.SetSize(80, 36)
 	l.Title = tuiListTitle(items)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	l.SetShowHelp(false)
-	l.Styles.Title = tuiTitle
+	l.Styles.Title = th.title
 
-	m := tuiModel{list: l, state: "list", allItems: items, errors: errs, refreshedAt: time.Now(), width: 80, height: 40}
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(th.p.primary)
+
+	m := tuiModel{list: l, state: "list", allItems: items, errors: errs,
+		refreshedAt: time.Now(), width: 80, height: 40, spin: sp, th: th}
 	m.actionsList = m.newActionsList()
 	return m
 }
@@ -261,7 +287,7 @@ func (m *tuiModel) newActionsList() list.Model {
 	if m.height > 2 && h > m.height-2 {
 		h = m.height - 2
 	}
-	l := list.New(listItems, actionItemDelegate{}, 30, h)
+	l := list.New(listItems, actionItemDelegate{th: m.th}, 30, h)
 	l.Title = title
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
@@ -273,10 +299,37 @@ func (m *tuiModel) newActionsList() list.Model {
 	return l
 }
 
-func (m tuiModel) Init() tea.Cmd { return nil }
+// Init starts the spinner and asks the terminal what colour its background is.
+//
+// The second half is new in v2. lipgloss no longer resolves an adaptive colour
+// behind your back, so the query is explicit: the answer arrives as a
+// BackgroundColorMsg and Update rebuilds the theme from it. Until then the
+// dark palette is assumed, which is right far more often than not.
+func (m tuiModel) Init() tea.Cmd {
+	return tea.Batch(m.spin.Tick, tea.RequestBackgroundColor)
+}
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// The terminal answered. Rebuild every style for the real background,
+		// and hand the new theme to the pieces that cached it.
+		m.th = newTheme(msg.IsDark())
+		m.list.Styles.Title = m.th.title
+		m.list.SetDelegate(vmItemDelegate{th: m.th})
+		m.spin.Style = lipgloss.NewStyle().Foreground(m.th.p.primary)
+		m.actionsList = m.newActionsList()
+		// The item descriptions carry colour, so they have to be rebuilt too.
+		m.refreshList()
+		return m, nil
+
+	case spinner.TickMsg:
+		// Keep ticking whatever the state: the header spinner has to keep
+		// turning while a long action blocks the list.
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -284,11 +337,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width >= 100 {
 			listWidth = msg.Width * 2 / 3
 		}
-		m.list.SetSize(listWidth, msg.Height-3)
+		// Two rows for the header, two for the status bar.
+		m.list.SetSize(listWidth, msg.Height-5)
 		m.actionsList.SetSize(msg.Width, msg.Height-2)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.showHelp {
 			m.showHelp = false
 			return m, nil
@@ -339,6 +393,71 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.cloneInput, cmd = m.cloneInput.Update(msg)
+			return m, cmd
+		}
+
+		if m.state == "confirmDelete" {
+			switch msg.String() {
+			case "y", "Y":
+				m.performAction("delete")
+				m.refreshList()
+				m.state = "list"
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				m.state = "actions"
+			}
+			return m, nil
+		}
+
+		if m.state == "actions" {
+			switch msg.String() {
+			case "esc":
+				m.state = "list"
+				return m, nil
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "enter":
+				if item, ok := m.actionsList.SelectedItem().(actionItem); ok {
+					switch item.id {
+					case "ports":
+						m.state = "edit"
+						m.edit = newEditModel(m.selected)
+						return m, m.edit.Init()
+					case "hardware":
+						m.state = "hwedit"
+						m.hwEdit = newHWEditModel(m.selected)
+						return m, m.hwEdit.Init()
+					case "clone":
+						m.state = "cloneInput"
+						m.cloneErr = ""
+						m.cloneInput = newCloneInput(m.selected.Name)
+						return m, m.cloneInput.Focus()
+					case "start", "stop", "restart", "pause", "unpause", "migrate", "snapshot":
+						m.performAction(item.id)
+						m.refreshList()
+						m.state = "list"
+						return m, nil
+					case "ssh", "viewer", "export":
+						actionID := item.id
+						postQuitAction = func() { m.performAction(actionID) }
+						m.quitting = true
+						return m, tea.Quit
+					case "console":
+						name, ns := m.selectedCT.Name, m.selectedCT.Namespace
+						postQuitAction = func() { ct.Console(name, ns) }
+						m.quitting = true
+						return m, tea.Quit
+					case "delete":
+						m.state = "confirmDelete"
+						return m, nil
+					}
+				}
+			}
+			var cmd tea.Cmd
+			m.actionsList, cmd = m.actionsList.Update(msg)
 			return m, cmd
 		}
 
@@ -625,7 +744,7 @@ func newCloneInput(sourceName string) textinput.Model {
 	ti.Placeholder = "target VM name"
 	ti.SetValue(sourceName + "-clone")
 	ti.CharLimit = 63
-	ti.Width = 30
+	ti.SetWidth(30)
 	return ti
 }
 
@@ -657,21 +776,21 @@ func runClone(src types.VM, dst string) error {
 }
 
 func (m *tuiModel) refreshList() {
-	items, errs := loadTUIItems()
+	items, errs := loadTUIItems(m.th)
 	cts, _ := ct.ListCTs()
 	for _, c := range cts {
-		items = append(items, ctToItem(c))
+		items = append(items, ctToItem(c, m.th))
 	}
 	m.allItems, m.errors, m.refreshedAt = items, errs, time.Now()
 	m.applyContextFilter()
 }
 
-func loadTUIItems() ([]list.Item, map[string]string) {
+func loadTUIItems(th theme) ([]list.Item, map[string]string) {
 	result := fleet.List(context.Background())
 	items := make([]list.Item, 0, len(result.VMs))
 	seen := map[string]bool{}
 	for _, vm := range result.VMs {
-		items = append(items, vmToItem(vm))
+		items = append(items, vmToItem(vm, th))
 		seen[vm.ID] = true
 	}
 	// A local Incus daemon with instances is useful zero-config discovery and
@@ -679,7 +798,7 @@ func loadTUIItems() ([]list.Item, map[string]string) {
 	if discovered, err := incus.List(); err == nil {
 		for _, vm := range discovered {
 			if !seen[vm.ID] {
-				items = append(items, vmToItem(vm))
+				items = append(items, vmToItem(vm, th))
 			}
 		}
 	}
@@ -736,14 +855,14 @@ func tuiListTitle(items []list.Item) string {
 			nVM++
 		}
 	}
-	t := fmt.Sprintf("Corral  ·  %d VMs", nVM)
+	t := fmt.Sprintf("%d VMs", nVM)
 	if nCT > 0 {
 		t += fmt.Sprintf("  ·  %d CTs", nCT)
 	}
-	return t + "  ·  d: cluster health"
+	return t
 }
 
-func (m tuiModel) View() string {
+func (m tuiModel) render() string {
 	if m.quitting {
 		return ""
 	}
@@ -752,11 +871,11 @@ func (m tuiModel) View() string {
 	}
 
 	if m.state == "edit" {
-		return m.edit.View()
+		return m.edit.render()
 	}
 
 	if m.state == "hwedit" {
-		return m.hwEdit.View()
+		return m.hwEdit.render()
 	}
 
 	if m.state == "cloneInput" {
@@ -773,34 +892,7 @@ func (m tuiModel) View() string {
 	}
 
 	if m.state == "doctor" {
-		var sb strings.Builder
-		sb.WriteString(tuiTitle.Render(" Fleet health "))
-		sb.WriteString("\n\n")
-		fixable := false
-		lastTarget := ""
-		for _, c := range m.doctorRows {
-			target := c.Context + " [" + c.Backend + "]"
-			if target != lastTarget {
-				sb.WriteString("\n  " + tuiRunning.Render(target) + "\n")
-				lastTarget = target
-			}
-			mark := tuiRunning.Render("●")
-			if !c.OK {
-				mark = tuiStopped.Render("○")
-			}
-			tag := ""
-			if !c.OK && c.Fixable {
-				tag = tuiRunning.Render("  (fixable)")
-				fixable = true
-			}
-			sb.WriteString(fmt.Sprintf("  %s %-30s %s%s\n", mark, c.Name, tuiHelp.Render(c.Detail), tag))
-		}
-		help := "  esc back"
-		if fixable {
-			help = "  f reconcile fixable   esc back"
-		}
-		sb.WriteString("\n" + tuiHelp.Render(help))
-		return sb.String()
+		return m.doctorView()
 	}
 
 	if m.state == "confirmDelete" {
@@ -817,16 +909,134 @@ func (m tuiModel) View() string {
 		return m.actionsList.View()
 	}
 
-	listView := m.list.View()
-	footer := tuiHelp.Render("  / search  tab context  enter actions  s start  x stop  r refresh  d doctor  ? help  q quit")
-	if len(m.errors) > 0 {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(fmt.Sprintf("  ⚠ %d context(s) unavailable", len(m.errors))) + footer
+	// Header: brand, selected context, live counts. Always on screen, so
+	// "where am I and how much is here" never needs a keystroke.
+	rows := make([]listRow, 0, len(m.list.Items()))
+	for _, it := range m.list.Items() {
+		switch v := it.(type) {
+		case vmItem:
+			rows = append(rows, listRow{state: v.state})
+		case ctItem:
+			rows = append(rows, listRow{state: v.state})
+		}
 	}
+	top := m.th.headerBar(m.width, m.contextName, countFleet(rows), m.busy,
+		m.spin.View()+" "+m.th.muted.Render(m.busyLabel))
+
+	listView := m.list.View()
 	if m.width >= 100 {
 		detailWidth := m.width - m.width*2/3 - 3
-		listView = lipgloss.JoinHorizontal(lipgloss.Top, listView, tuiDetailView(m.list.SelectedItem(), detailWidth, m.errors))
+		listView = lipgloss.JoinHorizontal(lipgloss.Top, listView,
+			tuiDetailView(m.list.SelectedItem(), detailWidth, m.errors, m.th))
 	}
-	return listView + "\n" + footer
+
+	// The bindings that work in this state, not every binding there is.
+	hints := []keyHint{
+		{"/", "search"}, {"tab", "context"}, {"enter", "actions"},
+		{"s", "start"}, {"x", "stop"}, {"r", "refresh"},
+		{"d", "doctor"}, {"?", "help"}, {"q", "quit"},
+	}
+	notice, noticeStyle := m.notice, m.th.muted
+	switch m.noticeKind {
+	case "ok":
+		noticeStyle = m.th.ok
+	case "warn":
+		noticeStyle = m.th.warn
+	case "error":
+		noticeStyle = m.th.danger
+	}
+	if notice == "" && len(m.errors) > 0 {
+		notice = fmt.Sprintf("⚠ %d context(s) unavailable — press d for details", len(m.errors))
+		noticeStyle = m.th.warn
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		top,
+		listView,
+		m.th.statusBar(m.width, hints, notice, noticeStyle),
+	)
+}
+
+// doctorView renders the fleet health check as a real table.
+//
+// It was hand-aligned with %-30s, which breaks the moment a check name is
+// longer than the pad or a detail wraps — and both happen, because the peer
+// checks added in #135 have long remedies. lipgloss/table measures the
+// content and sizes the columns itself.
+func (m tuiModel) doctorView() string {
+	fixable := false
+
+	t := table.New().
+		Width(tableWidth(m.width)).
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(m.th.p.border)).
+		Headers("", "TARGET", "CHECK", "DETAIL").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			base := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				return base.Bold(true).Foreground(m.th.p.muted)
+			}
+			switch col {
+			case 1:
+				return base.Foreground(m.th.p.accent)
+			case 3:
+				return base.Foreground(m.th.p.muted).MaxWidth(maxDetail(m.width))
+			default:
+				return base
+			}
+		})
+
+	for _, c := range m.doctorRows {
+		mark := m.th.ok.Render("●")
+		switch {
+		case c.OK:
+		case c.Severity == "warning":
+			mark = m.th.warn.Render("!")
+		default:
+			mark = m.th.danger.Render("✖")
+		}
+		detail := c.Detail
+		if !c.OK && c.Fixable {
+			detail += m.th.warn.Render("  (fixable)")
+			fixable = true
+		}
+		t.Row(mark, c.Context+" ["+c.Backend+"]", c.Name, detail)
+	}
+
+	hints := []keyHint{{"esc", "back"}}
+	if fixable {
+		hints = append([]keyHint{{"f", "reconcile fixable"}}, hints...)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.th.title.Render(" Fleet health "),
+		"",
+		t.String(),
+		m.th.statusBar(m.width, hints, "", m.th.muted),
+	)
+}
+
+// maxDetail keeps the detail column from pushing the table off screen. The
+// remedies the doctor prints are sentences, not labels.
+func maxDetail(width int) int {
+	limit := width - 48
+	if limit < 24 {
+		return 24
+	}
+	if limit > 90 {
+		return 90
+	}
+	return limit
+}
+
+// tableWidth fits the table to the terminal. Without it lipgloss sizes the
+// columns from the content, and the doctor's remedies are long enough to run
+// off the right edge — which is where they were before this view was a table.
+func tableWidth(width int) int {
+	if width < 60 {
+		return 60
+	}
+	return width - 2
 }
 
 func tuiHelpView() string {
@@ -841,41 +1051,46 @@ func tuiHelpView() string {
 		"  q            quit\n\n" + tuiHelp.Render("  press any key to return")
 }
 
-func tuiDetailView(item list.Item, width int, errs map[string]string) string {
-	style := lipgloss.NewStyle().Width(width).Padding(1).BorderLeft(true).BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+func tuiDetailView(item list.Item, width int, errs map[string]string, th theme) string {
+	style := lipgloss.NewStyle().Width(width).Padding(1).BorderLeft(true).
+		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(th.p.border)
+	label := th.label
 	vmItem, ok := item.(vmItem)
 	if !ok {
 		if ctItem, yes := item.(ctItem); yes {
-			return style.Render(fmt.Sprintf("CONTAINER\n\n%s\n%s/%s\n%d CPU · %s", ctItem.ct.Name, ctItem.ct.Namespace, ctItem.ct.Phase, ctItem.ct.CPU, ctItem.ct.Mem))
+			return style.Render(fmt.Sprintf("%s\n\n%s\n%s %s\n\n%s\n%s\n\n%s\n%d CPU · %s",
+				label.Render("CONTAINER"),
+				th.nameSelected.Render(ctItem.ct.Name),
+				th.statusDot(ctItem.state), th.muted.Render(statusWords(ctItem.ct.Phase)),
+				label.Render("BACKEND"), th.backendChip(ctItem.ct.Backend),
+				label.Render("RESOURCES"), ctItem.ct.CPU, ctItem.ct.Mem))
 		}
 		if len(errs) > 0 {
 			var lines []string
 			for target, message := range errs {
 				lines = append(lines, "⚠ "+target+"\n  "+message)
 			}
-			return style.Render("PARTIAL FLEET\n\n" + strings.Join(lines, "\n\n"))
+			return style.Render(th.warn.Render("PARTIAL FLEET") + "\n\n" + strings.Join(lines, "\n\n"))
 		}
 		return style.Render("No instances in this view.\n\nPress tab to change context or / to clear search.")
 	}
 	vm := vmItem.vm
-	state := "○ " + vm.Status
-	if vm.Running {
-		state = "● " + vm.Status
-	}
-	caps := []string{}
-	for name, enabled := range map[string]bool{"ssh": vm.Capabilities.SSH, "tty": vm.Capabilities.TTY, "vnc": vm.Capabilities.VNC, "rdp": vm.Capabilities.RDP, "snap": vm.Capabilities.Snapshots, "migrate": vm.Capabilities.Migrate} {
-		if enabled {
-			caps = append(caps, name)
-		}
-	}
-	body := fmt.Sprintf("%s\n%s\n\n%s\n\nBACKEND\n%s\n\nCONTEXT\n%s\n\nLOCATION\n%s / %s\n\nRESOURCES\n%d CPU · %s\n\nNETWORK\n%s\n\nACTIONS\n%s",
-		tuiRunning.Render(vm.Name), tuiHelp.Render(vm.ID), state, vm.Backend, defaultString(vm.Context, "local"), defaultString(vm.Namespace, "—"), defaultString(vm.Node, "—"), vm.CPU, defaultString(vm.Mem, "—"), defaultString(vm.IP, "not discovered"), strings.Join(caps, " · "))
+	body := fmt.Sprintf("%s\n%s\n\n%s %s\n\n%s\n%s\n\n%s\n%s\n\n%s\n%s / %s\n\n%s\n%d CPU · %s\n\n%s\n%s\n\n%s\n%s",
+		th.nameSelected.Render(vm.Name),
+		th.help.Render(vm.ID),
+		th.statusDot(vmItem.state), th.muted.Render(statusWords(vm.Status)),
+		label.Render("BACKEND"), th.backendChip(vm.Backend),
+		label.Render("CONTEXT"), defaultString(vm.Context, "local"),
+		label.Render("LOCATION"), defaultString(vm.Namespace, "—"), defaultString(vm.Node, "—"),
+		label.Render("RESOURCES"), vm.CPU, defaultString(vm.Mem, "—"),
+		label.Render("NETWORK"), defaultString(vm.IP, th.muted.Render("not discovered")),
+		label.Render("CAN DO"), th.capabilityChips(vm.Capabilities))
 	return style.Render(body)
 }
 
 // ── Actions list delegate ─────────────────────────────────────────
 
-type actionItemDelegate struct{}
+type actionItemDelegate struct{ th theme }
 
 func (d actionItemDelegate) Height() int                               { return 1 }
 func (d actionItemDelegate) Spacing() int                              { return 1 }
@@ -888,7 +1103,7 @@ func (d actionItemDelegate) Render(w io.Writer, m list.Model, index int, li list
 
 	label := a.label
 	if index == m.Index() {
-		label = tuiRunning.Render("▶ " + label)
+		label = d.th.ok.Render("▶ " + label)
 	} else {
 		label = "  " + label
 	}
@@ -948,7 +1163,7 @@ func (m editModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc":
 			m.done = true
@@ -997,7 +1212,7 @@ func (m editModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m editModel) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "enter":
 			if port, err := strconv.Atoi(m.addInput.Value()); err == nil && port > 0 && port < 65536 {
@@ -1031,7 +1246,7 @@ func (m *editModel) applyPorts() {
 	}
 }
 
-func (m editModel) View() string {
+func (m editModel) render() string {
 	var sb strings.Builder
 	host := m.vm.Name + "-vm.manatee-basking.ts.net"
 	sb.WriteString(tuiTitle.Render(fmt.Sprintf(" Ports: %s ", host)))
@@ -1093,13 +1308,13 @@ func newHWEditModel(vm types.VM) hwEditModel {
 	cpu := textinput.New()
 	cpu.SetValue(strconv.Itoa(vm.CPU))
 	cpu.CharLimit = 3
-	cpu.Width = 6
+	cpu.SetWidth(6)
 	cpu.Focus()
 
 	mem := textinput.New()
 	mem.SetValue(vm.Mem)
 	mem.CharLimit = 8
-	mem.Width = 8
+	mem.SetWidth(8)
 
 	return hwEditModel{vm: vm, cpu: cpu, mem: mem}
 }
@@ -1108,7 +1323,7 @@ func (m hwEditModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m hwEditModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc", "q":
 			m.done = true
@@ -1152,7 +1367,7 @@ func (m *hwEditModel) apply() {
 	}
 }
 
-func (m hwEditModel) View() string {
+func (m hwEditModel) render() string {
 	var sb strings.Builder
 	sb.WriteString(tuiTitle.Render(fmt.Sprintf(" Edit hardware: %s ", m.vm.Name)))
 	sb.WriteString("\n\n")
@@ -1181,7 +1396,7 @@ func exposedPorts(name, ns string) []int {
 
 // ── List delegates ────────────────────────────────────────────────
 
-type vmItemDelegate struct{}
+type vmItemDelegate struct{ th theme }
 
 func (d vmItemDelegate) Height() int                               { return 2 }
 func (d vmItemDelegate) Spacing() int                              { return 0 }
@@ -1197,22 +1412,59 @@ func (d vmItemDelegate) Render(w io.Writer, m list.Model, index int, li list.Ite
 		return
 	}
 
+	// The run state drives the dot. A row now says whether the thing is up
+	// before you have read its name.
+	state := stateStopped
+	switch v := li.(type) {
+	case vmItem:
+		state = v.state
+	case ctItem:
+		state = v.state
+	}
+
 	name := i.Title()
-	desc := i.Description()
+	selected := index == m.Index()
 
-	width := m.Width()
-	if width > 6 && len(desc) > width-4 {
-		desc = desc[:width-7] + "..."
-	}
-
-	if index == m.Index() {
-		name = tuiRunning.Render("▶ " + name)
+	var marker, nameStyled string
+	if selected {
+		marker = lipgloss.NewStyle().Foreground(d.th.p.primary).Bold(true).Render("▌")
+		nameStyled = d.th.nameSelected.Render(name)
 	} else {
-		name = "  " + name
+		marker = " "
+		nameStyled = d.th.name.Render(name)
 	}
 
-	fmt.Fprintf(w, "%s\n%s", name, tuiHelp.Render("  "+desc))
+	line1 := fmt.Sprintf("%s %s %s", marker, d.th.statusDot(state), nameStyled)
+	line2 := fmt.Sprintf("%s   %s", marker, i.Description())
+
+	// MaxWidth, not a byte slice: the description carries ANSI colour now, and
+	// cutting it by length would sever an escape sequence and bleed colour
+	// down the rest of the screen.
+	if width := m.Width(); width > 4 {
+		clamp := lipgloss.NewStyle().MaxWidth(width)
+		line1, line2 = clamp.Render(line1), clamp.Render(line2)
+	}
+
+	fmt.Fprintf(w, "%s\n%s", line1, line2)
 }
+
+// ── Bubble Tea v2 View ────────────────────────────────────────────
+//
+// v2's View returns a struct rather than a string: terminal features are
+// declared on it instead of being toggled with commands at startup. That is
+// why the alt screen is set here and not passed to tea.NewProgram.
+//
+// The rendering itself stays in render(), a plain string method, so the view
+// layer is still testable without building a tea.View.
+
+func (m tuiModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m editModel) View() tea.View   { return tea.NewView(m.render()) }
+func (m hwEditModel) View() tea.View { return tea.NewView(m.render()) }
 
 // fleetDiagnosis is what the TUI's doctor view shows: every compute context
 // plus every configured peer, matching the fleet the list view aggregates.

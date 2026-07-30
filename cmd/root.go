@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/demo"
@@ -57,7 +57,8 @@ Run without arguments to launch the interactive TUI.`,
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		p := tea.NewProgram(newTUIModel(), tea.WithAltScreen())
+		// The alt screen is declared on the View in v2, not passed here.
+		p := tea.NewProgram(newTUIModel())
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

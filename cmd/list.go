@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"github.com/tuna-os/corral/pkg/fleet"
 	"github.com/tuna-os/corral/pkg/types"
