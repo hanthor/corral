@@ -146,6 +146,40 @@ backend that tried and failed is a 502.
 (the `auto-` prefix), oldest first, and is scoped by the instance reference —
 so two contexts running a same-named instance prune independently.
 
+### Bootc build and import
+
+Building a bootable-container image into a disk, and putting that disk on a
+backend, are separate steps (`pkg/bootc`): a `Builder` produces a disk, a
+`Target` turns a disk into an instance. They pair freely — build on the cluster
+and run there, or build locally with podman and run under local QEMU or
+libvirt.
+
+**The backend is a property of the image, not a choice.** Probing the image
+filesystem with `podman cp` — never executing it, since Universal Blue images
+ship Rust uutils that `podman --entrypoint` cannot dispatch:
+
+- **bootupd present** → ostree backend, `xfs`, `--generic-image`
+- **systemd-boot, no bootupd** → composefs backend, `btrfs`, `--composefs-backend`
+- **neither** → ostree
+
+`--generic-image` is load-bearing rather than cosmetic. bootupd installs the
+bootloader to `EFI/<vendor>/` plus an efibootmgr NVRAM entry, and a fresh VM
+has empty NVRAM — so without the removable `EFI/BOOT/BOOTX64.EFI` fallback the
+disk builds perfectly and then boots to nothing.
+
+The local builder runs `bootc install to-disk --via-loopback` in a privileged
+podman container. The cluster builder cannot use loopback — pod security
+contexts there lack loop module access, which is what `e141dbb` worked around —
+but a privileged container on a real host has loop devices.
+
+**composefs images are refused locally.** After `bootc install` they need the
+kernel and initrd re-extracted over bootc's EROFS zero-filled ESP copies, and
+the root key injected into `state/os/default/var/roothome/.ssh` because
+`--root-ssh-authorized-keys` is a no-op on composefs. Only the cluster builder
+implements that; half of it would produce a desktop image that builds and does
+not boot. Incus is refused too — an Incus VM boots from Incus's own image store
+and cannot adopt a foreign pre-partitioned disk.
+
 ### Windows guests
 
 Windows needs three things no other guest does, and each is delivered

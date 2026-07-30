@@ -1,8 +1,18 @@
 // corral-bootc is the bootc Corral plugin: it builds a bootable container
-// image into a VM disk on-cluster and boots it. Installed via the Corral
-// marketplace (`corral plugin install bootc`) and invoked as `corral bootc`.
+// image into a VM disk and boots it. Installed via the Corral marketplace
+// (`corral plugin install bootc`) and invoked as `corral bootc`.
 //
-// It's a separate binary built with `-tags bootc`, so the bootc pipeline in
+// Two paths, chosen by the selected context (#130):
+//
+//   - **KubeVirt** — the original: a privileged Job on the cluster runs
+//     `bootc install to-disk` into a PVC, and the VM is created around it.
+//     The cluster does the work, so the workstation need not be able to.
+//   - **Everything else** — pkg/bootc builds the disk here with podman and
+//     hands it to the backend's target: local QEMU adopts it as a VM's disk,
+//     libvirt defines a UEFI domain around it. Incus is a documented
+//     rejection; see bootc.TargetFor.
+//
+// It's a separate binary built with `-tags bootc`, so the cluster pipeline in
 // pkg/kubevirt (//go:build bootc) is registered here but stays out of the lean
 // core binary.
 package main
@@ -10,11 +20,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/bootc"
 	"github.com/tuna-os/corral/pkg/catalog"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/plugin/sdk"
+	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -44,14 +58,83 @@ func finishVM(name, ns, pvcName, image, key, mem string, cpu int, node string) e
 	return nil
 }
 
+// resolveContext picks the Corral context to build for.
+func resolveContext(name string) (config.ContextConfig, error) {
+	if name == "" {
+		return config.DefaultContext(), nil
+	}
+	found, ok := config.FindContext(name)
+	if !ok {
+		return config.ContextConfig{}, fmt.Errorf("unknown context %q (see corral context ls)", name)
+	}
+	return found, nil
+}
+
+// buildAndImport is the off-cluster path: build the disk here with podman,
+// then hand it to the backend's target. The split is the point of #130 — the
+// same built disk works for local QEMU and for libvirt, and neither needs a
+// cluster to produce it.
+func buildAndImport(name string, target config.ContextConfig, image, sshKey, disk, mem string, cpu int, filesystem string, useSudo bool) error {
+	if image == "" {
+		return fmt.Errorf("--image is required — a catalog name (see `corral bootc images`) or an OCI ref like quay.io/fedora/fedora-bootc:41")
+	}
+	image = catalog.ResolveBootc(image)
+
+	importer, err := bootc.TargetFor(target.Backend)
+	if err != nil {
+		return err
+	}
+	builder := bootc.LocalBuilder{Sudo: useSudo}
+	if err := builder.Available(); err != nil {
+		// Report what the target needs too, so one run tells the operator
+		// everything to install rather than one thing per attempt.
+		fmt.Fprintf(os.Stderr, "the %s target also needs:\n", target.Backend)
+		for _, req := range importer.Requires() {
+			fmt.Fprintf(os.Stderr, "  - %s\n", req)
+		}
+		return err
+	}
+
+	key := sshKey
+	if key == "" {
+		key = kubevirt.LoadSSHPublicKey()
+	}
+	size := disk
+	if size == "" {
+		size = "20G"
+	}
+
+	// The disk is built into the image cache and consumed by Import, which
+	// converts it into the backend's own storage.
+	workDir := filepath.Join(qemu.VMHome(), "cache", "bootc")
+	built, err := builder.Build(bootc.BuildRequest{
+		Image: image, Dest: filepath.Join(workDir, name+".raw"),
+		Size: size, SSHKey: key, Filesystem: filesystem,
+	}, func(msg string) { fmt.Fprintln(os.Stderr, msg) })
+	if err != nil {
+		return err
+	}
+	defer os.Remove(built.Path)
+
+	ref := types.InstanceRef{Backend: target.Backend, Context: target.Context, Name: name}
+	if err := importer.Import(ref, built.Path, bootc.CreateOpts{
+		CPU: cpu, Memory: mem, Disk: size, SSHKey: key,
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "created %s from %s\n", ref.String(), image)
+	return nil
+}
+
 func main() {
-	if sdk.HandleMetadata(sdk.Metadata{Name: "bootc", Version: "0.2.0", Description: "Build bootable container images into KubeVirt VMs", Capabilities: []string{"cli-command", "backend-workflow"}, Permissions: []string{"mutate Kubernetes resources", "pull container images"}, SupportedBackends: []string{"kubevirt"}}) {
+	if sdk.HandleMetadata(sdk.Metadata{Name: "bootc", Version: "0.3.0", Description: "Build bootable container images into VMs", Capabilities: []string{"cli-command", "backend-workflow"}, Permissions: []string{"mutate Kubernetes resources and instance definitions", "pull container images", "run privileged containers to partition a disk image"}, SupportedBackends: bootc.SupportedBackends}) {
 		return
 	}
 	var (
 		namespace, disk, mem, sshKey, node, storageClass string
+		contextName, filesystem                          string
 		cpu                                              int
-		resume                                           bool
+		resume, useSudo                                  bool
 	)
 
 	create := &cobra.Command{
@@ -63,6 +146,16 @@ func main() {
 			ns := namespace
 			if ns == "" {
 				ns = kubevirt.DefaultNamespace
+			}
+			// Off-cluster backends build locally and import, rather than
+			// running a privileged Job on a cluster they do not have (#130).
+			target, err := resolveContext(contextName)
+			if err != nil {
+				return err
+			}
+			if target.Backend != "kubevirt" {
+				image, _ := cmd.Flags().GetString("image")
+				return buildAndImport(name, target, image, sshKey, disk, mem, cpu, filesystem, useSudo)
 			}
 			if !kubevirt.BootcAvailable() {
 				return fmt.Errorf("this corral-bootc build lacks the bootc pipeline (build with -tags bootc)")
@@ -121,6 +214,8 @@ func main() {
 	create.Flags().StringVar(&sshKey, "ssh-key", "", "SSH public key (default: ~/.ssh/*.pub)")
 	create.Flags().StringVarP(&storageClass, "storage-class", "s", "", "StorageClass for the disk PVC (default: cluster preference)")
 	create.Flags().BoolVar(&resume, "resume", false, "Finish a build that completed after a previous `create` was interrupted")
+	create.Flags().StringVar(&filesystem, "filesystem", "", "Override the root filesystem a local build would pick from the image (xfs for ostree, btrfs for composefs)")
+	create.Flags().BoolVar(&useSudo, "sudo", false, "Run the local build's podman under sudo — bootc install needs root (off-cluster backends only)")
 
 	images := &cobra.Command{
 		Use:   "images",
@@ -241,7 +336,8 @@ preserved. Use this to apply image updates.`,
 		Use:   "corral-bootc",
 		Short: "Corral bootc plugin — boot a container image as a VM",
 	}
-	root.PersistentFlags().StringVarP(&namespace, "namespace", "n", kubevirt.DefaultNamespace, "Namespace")
+	root.PersistentFlags().StringVarP(&namespace, "namespace", "n", kubevirt.DefaultNamespace, "Namespace (KubeVirt only)")
+	root.PersistentFlags().StringVar(&contextName, "context", "", "Corral context to build for (default: the selected context)")
 	root.AddCommand(create, images, rebuildCmd, upgradeCmd, switchCmd, statusCmd)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
