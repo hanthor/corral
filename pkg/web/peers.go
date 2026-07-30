@@ -74,6 +74,14 @@ func peerVMs() []types.VM {
 			if vms[i].Context == "" {
 				vms[i].Context = peer.Name
 			}
+			// Re-key the identity to this peer. Whatever ID the remote sent is
+			// scoped to its own fleet — and a peer old enough to answer only
+			// /api/vms may send none at all — so two peers running a same-named
+			// VM would arrive indistinguishable and a bare-name selector would
+			// pick one at random. Derived before the namespace is encoded, so
+			// the ID names the instance the way its peer does.
+			vms[i].ID = ""
+			vms[i].SetIdentity()
 			payload := peer.Name + "\x00" + vms[i].Namespace
 			vms[i].Namespace = "peer-" + base64.RawURLEncoding.EncodeToString([]byte(payload))
 			peerInventory.Store(vms[i].Namespace+"/"+vms[i].Name, vms[i])
