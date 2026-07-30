@@ -153,11 +153,14 @@ func CapabilitiesForBackend(backend string) InstanceCapabilities {
 	case "kubevirt":
 		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true, VNC: true, RDP: true, Metrics: true, Snapshots: true, Migrate: true, Volumes: true, GPU: true}
 	case "qemu":
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, VNC: true}
+		// Snapshots: qcow2 internal snapshots via qemu-img. Only while the VM
+		// is stopped and only on a qcow2 disk — the adapter refuses the rest
+		// with a reason, which is a better experience than a hidden tab.
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, VNC: true, Snapshots: true}
 	case "incus":
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true}
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true, Snapshots: true}
 	case "libvirt":
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true}
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true, Snapshots: true}
 	default:
 		return InstanceCapabilities{}
 	}
