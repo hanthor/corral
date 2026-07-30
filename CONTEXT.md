@@ -146,6 +146,35 @@ backend that tried and failed is a 502.
 (the `auto-` prefix), oldest first, and is scoped by the instance reference —
 so two contexts running a same-named instance prune independently.
 
+### Schedule
+
+An instance's autostart/shutdown window, stored against its canonical
+reference — a bare name is meaningless when three contexts each have a `dev`.
+`pkg/schedule` owns the record, the cron evaluation, and the tick;
+`pkg/lifecycle` dispatches the resulting start/stop on any backend.
+
+Two execution models, because the honest answer differs by backend:
+
+- **In-cluster** (`--in-cluster`, KubeVirt only): a Kubernetes CronJob per
+  boundary. The cluster fires it, so it works with the workstation closed.
+- **Local** (everything else): `corral schedule tick`, driven by a systemd user
+  timer, evaluates what is due and dispatches it. A laptop VM, an Incus remote,
+  and a libvirt host have no CronJob controller to do it for them.
+
+The portability limit is inherent: a locally scheduled boundary only fires
+while that machine is awake and its timer is running. An instance that must
+start at 09:00 regardless belongs on the cluster path.
+
+Corral parses cron itself for the local path, accepting only the portable
+subset (`*`, `n`, `a-b`, `*/n`, `a-b/n`, and comma lists). Extensions like
+`@daily` or `L` are refused rather than half-supported — an expression that
+means one thing to Kubernetes and another to the tick is worse than one that
+won't be created. Day-of-month and day-of-week are OR'd when both are
+restricted, matching cron(8).
+
+A context that can't be reached is reported and retried next tick; it never
+deletes the schedule, and it never stops the other contexts from running.
+
 ### Plugin
 
 A krew-style extension binary (`corral-<name>`) installed via
