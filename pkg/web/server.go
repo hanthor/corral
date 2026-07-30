@@ -306,7 +306,7 @@ func handleInventory(w http.ResponseWriter, r *http.Request) {
 
 func handleAPIMeta(w http.ResponseWriter, _ *http.Request) {
 	jsonResp(w, http.StatusOK, map[string]any{
-		"protocol": 1,
+		"protocol": types.PeerProtocol,
 		"features": []string{"inventory", "peer-relay", "service-token", "instance-capabilities"},
 	})
 }

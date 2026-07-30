@@ -411,7 +411,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "f":
 				doctor.Fix()
-				m.doctorRows = doctor.RunContexts(config.Contexts())
+				m.doctorRows = fleetDiagnosis()
 			case "esc", "q", "enter":
 				m.state = "list"
 			case "ctrl+c":
@@ -427,7 +427,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "d":
-			m.doctorRows = doctor.RunContexts(config.Contexts())
+			m.doctorRows = fleetDiagnosis()
 			m.state = "doctor"
 			return m, nil
 		case "?":
@@ -1212,4 +1212,10 @@ func (d vmItemDelegate) Render(w io.Writer, m list.Model, index int, li list.Ite
 	}
 
 	fmt.Fprintf(w, "%s\n%s", name, tuiHelp.Render("  "+desc))
+}
+
+// fleetDiagnosis is what the TUI's doctor view shows: every compute context
+// plus every configured peer, matching the fleet the list view aggregates.
+func fleetDiagnosis() []doctor.Check {
+	return append(doctor.RunContexts(config.Contexts()), doctor.RunPeers(config.Peers())...)
 }
