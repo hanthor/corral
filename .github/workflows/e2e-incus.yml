@@ -96,6 +96,10 @@ jobs:
       # degrades instead of failing.
       - name: Snapshot, export and device adapters against real backends
         run: |
+          # pipefail, or `go test | tee` reports tee's exit status and a real
+          # test failure lands as a green tick. Found exactly that way: an
+          # Incus device-discovery failure passed this step unnoticed.
+          set -o pipefail
           go test -count=1 -tags e2esnapshot -v -run TestE2E ./pkg/snapshot/ ./pkg/export/ ./pkg/device/ | tee /tmp/snap-e2e.txt
           # The subtests skip when their backend is missing, which keeps the
           # file runnable on a laptop — but this runner installs all three, so

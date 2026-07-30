@@ -27,6 +27,7 @@ package device
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,8 +81,10 @@ func TestE2E_LibvirtDeviceDiscovery(t *testing.T) {
 		if d.Address == "" {
 			t.Errorf("device has no address: %+v", d)
 		}
-		if _, err := hostdevXML(d, "probe"); err != nil {
-			t.Errorf("discovered device %q produced an address hostdevXML rejects: %v", d.Address, err)
+		if d.Attachable {
+			if _, err := hostdevXML(d, "probe"); err != nil {
+				t.Errorf("discovered device %q produced an address hostdevXML rejects: %v", d.Address, err)
+			}
 		}
 		if d.Vendor != "" {
 			withVendor++
@@ -111,17 +114,9 @@ func TestE2E_LibvirtHostdevXMLIsAccepted(t *testing.T) {
 	if err != nil || len(devices) == 0 {
 		t.Skipf("no devices to build a hostdev from: %v", err)
 	}
-	// Pick a device that is emphatically not the boot display, and never start
-	// the domain, so nothing is taken away from the host.
-	var dev Device
-	for _, d := range devices {
-		if !d.BootDisplay {
-			dev = d
-			break
-		}
-	}
-	if dev.Address == "" {
-		t.Skip("every discovered device is the boot display")
+	dev, reason := attachableDevice(devices)
+	if reason != "" {
+		t.Skip(reason)
 	}
 
 	dir := t.TempDir()
@@ -206,8 +201,21 @@ func TestE2E_IncusDeviceDiscovery(t *testing.T) {
 	t.Logf("discovered %d devices via Incus", len(devices))
 	var withVendor int
 	for _, d := range devices {
+		// A device with no PCI address is legitimate — a cloud VM's synthetic
+		// GPU is a VMBus device — but it must be marked unattachable with a
+		// reason, not offered as something that can be passed through.
 		if d.Address == "" {
-			t.Errorf("device has no PCI address: %+v", d)
+			if d.Attachable {
+				t.Errorf("device with no PCI address reported as attachable: %+v", d)
+			}
+			if d.Unattachable == "" {
+				t.Errorf("device with no PCI address gives no reason: %+v", d)
+			}
+			if d.ID == "" {
+				t.Errorf("device with no PCI address has no identifier at all: %+v", d)
+			}
+		} else if !d.Attachable {
+			t.Errorf("device with a PCI address reported as unattachable: %+v", d)
 		}
 		if d.Vendor != "" {
 			withVendor++
@@ -242,15 +250,9 @@ func TestE2E_IncusDeviceSyntaxIsRecognised(t *testing.T) {
 	if err != nil || len(devices) == 0 {
 		t.Skipf("no devices to try: %v", err)
 	}
-	var dev Device
-	for _, d := range devices {
-		if !d.BootDisplay {
-			dev = d
-			break
-		}
-	}
-	if dev.Address == "" {
-		t.Skip("every discovered device is the boot display")
+	dev, reason := attachableDevice(devices)
+	if reason != "" {
+		t.Skip(reason)
 	}
 
 	const instance = "corral-device-e2e"
@@ -299,6 +301,27 @@ func TestE2E_IncusDeviceSyntaxIsRecognised(t *testing.T) {
 		}
 	}
 	t.Logf("Incus rejected the device itself, which is expected without passthrough set up: %v", err)
+}
+
+// attachableDevice picks something safe to probe with, and says precisely why
+// when there is nothing. The distinction matters: "all boot display" and "none
+// has a PCI address" are different facts, and conflating them hid a real bug
+// where a synthetic GPU came back with no address at all.
+func attachableDevice(devices []Device) (Device, string) {
+	var boot, unattachable int
+	for _, d := range devices {
+		switch {
+		case d.BootDisplay:
+			boot++
+		case !d.Attachable:
+			unattachable++
+		default:
+			return d, ""
+		}
+	}
+	return Device{}, fmt.Sprintf(
+		"no device here can be safely probed: %d of %d are the host boot display, %d report no PCI address",
+		boot, len(devices), unattachable)
 }
 
 func truncate(s string, n int) string {

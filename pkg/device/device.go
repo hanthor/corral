@@ -74,6 +74,15 @@ type Device struct {
 	// driver. A device that is not ready can often still be attached — libvirt
 	// with managed='yes' rebinds it at start — but the caller should know.
 	Ready bool `json:"ready"`
+	// Attachable reports whether this backend can actually hand the device to
+	// a guest. Not every discovered device can be: a cloud VM's synthetic GPU
+	// is a VMBus device with no PCI address at all, and both libvirt and Incus
+	// address passthrough devices by PCI address. Such a device is still worth
+	// listing — an operator asking "what GPUs are here" should be told — but
+	// attaching it is refused with the reason rather than attempted.
+	Attachable bool `json:"attachable"`
+	// Unattachable explains why, when Attachable is false.
+	Unattachable string `json:"unattachable,omitempty"`
 }
 
 // Attachment is a device bound to an instance.
@@ -192,10 +201,30 @@ func checkSafe(dev Device) error {
 	if dev.BootDisplay {
 		return &Refused{Device: dev, Reason: "it is the host's boot display; passing it through would leave the host with no console"}
 	}
+	if !dev.Attachable {
+		reason := dev.Unattachable
+		if reason == "" {
+			reason = "this backend cannot address it for passthrough"
+		}
+		return &Refused{Device: dev, Reason: reason}
+	}
 	if dev.ID == "" {
 		return fmt.Errorf("device has no identifier")
 	}
 	return nil
+}
+
+// pciAttachable fills in Attachable/Unattachable for the backends that address
+// devices by PCI address. Found on a real runner: a cloud VM's synthetic GPU
+// (hyperv_drm, vendor 1414) is a VMBus device and reports no PCI address, so
+// there is nothing to put in a <hostdev> or an `incus config device add`.
+func pciAttachable(dev *Device) {
+	if dev.Address != "" {
+		dev.Attachable = true
+		return
+	}
+	dev.Attachable = false
+	dev.Unattachable = "it reports no PCI address — a synthetic or platform device, which cannot be passed through by address"
 }
 
 // baseConsequences are true of every backend here. An adapter may add to them

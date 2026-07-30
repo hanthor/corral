@@ -88,7 +88,7 @@ func (l Libvirt) describe(context, name string) (Device, error) {
 	address := fmt.Sprintf("%04x:%02x:%02x.%d",
 		doc.Capability.Domain, doc.Capability.Bus, doc.Capability.Slot, doc.Capability.Function)
 	description := strings.TrimSpace(doc.Capability.Vendor.Name + " " + doc.Capability.Product.Name)
-	return Device{
+	dev := Device{
 		ID:          address,
 		Address:     address,
 		Vendor:      strings.TrimPrefix(doc.Capability.Vendor.ID, "0x"),
@@ -98,7 +98,9 @@ func (l Libvirt) describe(context, name string) (Device, error) {
 		Class:       classify(description),
 		BootDisplay: isBootDisplay(address),
 		Ready:       doc.Driver == "vfio-pci",
-	}, nil
+	}
+	pciAttachable(&dev)
+	return dev, nil
 }
 
 func (Libvirt) Consequences(dev Device) []Consequence { return baseConsequences(dev) }
@@ -283,28 +285,42 @@ func (i Incus) List(context string) ([]Device, error) {
 	var devices []Device
 	for _, c := range res.GPU.Cards {
 		description := strings.TrimSpace(c.Vendor + " " + c.Product)
-		devices = append(devices, Device{
+		dev := Device{
 			ID: c.PCIAddress, Address: c.PCIAddress,
 			Vendor: c.VendorID, Product: c.ProductID,
 			Description: description, Driver: c.Driver, Class: GPU,
 			BootDisplay: isBootDisplay(c.PCIAddress),
 			Ready:       c.Driver == "vfio-pci",
-		})
-		seen[c.PCIAddress] = true
+		}
+		if dev.ID == "" {
+			// A synthetic GPU has no PCI address to key on, so fall back to an
+			// identifier that at least tells the operator which card it is.
+			dev.ID = syntheticID(c.VendorID, c.ProductID, c.Driver)
+		}
+		pciAttachable(&dev)
+		devices = append(devices, dev)
+		if c.PCIAddress != "" {
+			seen[c.PCIAddress] = true
+		}
 	}
 	for _, d := range res.PCI.Devices {
-		if seen[d.PCIAddress] {
+		if d.PCIAddress != "" && seen[d.PCIAddress] {
 			continue // already reported as a GPU, with better metadata
 		}
 		description := strings.TrimSpace(d.Vendor + " " + d.Product)
-		devices = append(devices, Device{
+		dev := Device{
 			ID: d.PCIAddress, Address: d.PCIAddress,
 			Vendor: d.VendorID, Product: d.ProductID,
 			Description: description, Driver: d.Driver,
 			Class:       classify(description),
 			BootDisplay: isBootDisplay(d.PCIAddress),
 			Ready:       d.Driver == "vfio-pci",
-		})
+		}
+		if dev.ID == "" {
+			dev.ID = syntheticID(d.VendorID, d.ProductID, d.Driver)
+		}
+		pciAttachable(&dev)
+		devices = append(devices, dev)
 	}
 	sortDevices(devices)
 	return devices, nil
@@ -367,6 +383,19 @@ func (i Incus) Attached(ref types.InstanceRef) ([]Attachment, error) {
 	return attachments, nil
 }
 
+// syntheticID names a device that has no PCI address, so it can still be
+// listed and talked about even though it cannot be attached.
+func syntheticID(vendor, product, driver string) string {
+	switch {
+	case vendor != "" && product != "":
+		return fmt.Sprintf("%s:%s", vendor, product)
+	case driver != "":
+		return driver
+	default:
+		return "unknown-device"
+	}
+}
+
 // ── KubeVirt ──────────────────────────────────────────────────────
 //
 // The pre-existing model, behind the contract. KubeVirt is the odd one out:
@@ -409,6 +438,9 @@ func (KubeVirt) List(context string) ([]Device, error) {
 				// Allocatable means the device plugin has it bound and ready;
 				// that is exactly what readiness means on this backend.
 				Ready: count != "0",
+				// KubeVirt addresses devices by resource name, not PCI
+				// address, so there is always something to attach with.
+				Attachable: true,
 			})
 		}
 	}

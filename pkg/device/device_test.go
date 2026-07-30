@@ -112,6 +112,9 @@ func TestAttach_AllowsANonBootGPU(t *testing.T) {
 
 	second := Device{ID: "0000:01:00.0", Address: "0000:01:00.0", Class: GPU,
 		BootDisplay: isBootDisplay("0000:01:00.0")}
+	// Through the real rule rather than a hand-set flag, so the test cannot
+	// disagree with what discovery would have produced.
+	pciAttachable(&second)
 	if second.BootDisplay {
 		t.Fatal("a second GPU was wrongly marked as the boot display")
 	}
@@ -321,6 +324,7 @@ func TestIncus_AttachUsesTheRightDeviceTypePerClass(t *testing.T) {
 				address = "0000:02:00.0"
 			}
 			dev := Device{ID: address, Address: address, Class: tc.class}
+			pciAttachable(&dev)
 			ref := types.InstanceRef{Backend: "incus", Context: "lab", Name: "vm"}
 			if err := (Incus{}).Attach(ref, dev, "dev0"); err != nil {
 				t.Fatal(err)
@@ -411,5 +415,75 @@ func TestClassify(t *testing.T) {
 		if got := classify(input); got != want {
 			t.Errorf("classify(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// Found on a real CI runner: a cloud VM's synthetic GPU (hyperv_drm) is a
+// VMBus device and reports no PCI address at all. It is a real GPU worth
+// listing — an operator asking "what is here" should be told — but there is
+// nothing to put in a <hostdev> or an `incus config device add`, so attaching
+// it has to be refused rather than attempted with an empty address.
+func TestIncus_SyntheticGPUIsListedButNotAttachable(t *testing.T) {
+	fake := withFake(t)
+	fakeBootVGA(t, "")
+	fake.AddResponse("incus query local:/1.0/resources", `{
+	  "gpu": {"cards": [
+	    {"driver":"hyperv_drm","pci_address":"","vendor":"Microsoft Corporation","vendor_id":"1414","product":"","product_id":"6"}
+	  ]},
+	  "pci": {"devices": []}
+	}`, nil)
+
+	devices, err := (Incus{}).List("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("got %d devices, want the synthetic GPU listed: %+v", len(devices), devices)
+	}
+	d := devices[0]
+	if d.Class != GPU {
+		t.Errorf("class = %q, want gpu", d.Class)
+	}
+	if d.ID == "" {
+		t.Error("no identifier at all, so it cannot even be named in output")
+	}
+	if d.Attachable {
+		t.Error("a device with no PCI address reported as attachable")
+	}
+	if !strings.Contains(d.Unattachable, "PCI address") {
+		t.Errorf("no usable reason: %q", d.Unattachable)
+	}
+
+	// And attaching it must refuse rather than emit an empty address.
+	err = (Incus{}).Attach(types.InstanceRef{Backend: "incus", Context: "local", Name: "vm"}, d, "gpu0")
+	var refused *Refused
+	if !errors.As(err, &refused) {
+		t.Fatalf("want *Refused, got %T: %v", err, err)
+	}
+	for _, call := range fake.Calls() {
+		if strings.Contains(strings.Join(call.Args, " "), "device add") {
+			t.Errorf("tried to attach a device with no address: %v", call.Args)
+		}
+	}
+}
+
+// The counterpart: a device with a real address stays attachable, or the
+// guard above would make the whole feature unusable.
+func TestDevicesWithAnAddressStayAttachable(t *testing.T) {
+	fake := withFake(t)
+	fakeBootVGA(t, "")
+	fake.AddResponse("incus query local:/1.0/resources", `{
+	  "gpu": {"cards": [
+	    {"driver":"nvidia","pci_address":"0000:01:00.0","vendor":"NVIDIA","vendor_id":"10de","product":"RTX 3090","product_id":"2204"}
+	  ]},
+	  "pci": {"devices": []}
+	}`, nil)
+
+	devices, err := (Incus{}).List("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || !devices[0].Attachable {
+		t.Fatalf("a real PCI GPU was not attachable: %+v", devices)
 	}
 }
