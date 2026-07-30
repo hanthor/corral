@@ -256,10 +256,16 @@ func TestE2E_IncusDeviceSyntaxIsRecognised(t *testing.T) {
 	}
 
 	const instance = "corral-device-e2e"
-	// init, not launch: the instance is never started, so nothing is ever
-	// bound away from the host.
-	if out, err := exec.Command("incus", "init", "images:ubuntu/22.04", instance).CombinedOutput(); err != nil {
-		t.Skipf("cannot init an Incus instance here: %s: %v", out, err)
+	// A VM, not a container: Incus only accepts `pci` and physical `gpu`
+	// devices on VMs, and a container rejects them with "Unsupported device
+	// type" — which reads like a device problem but is really the target being
+	// wrong. Found exactly that way: this test first passed against a
+	// container, having validated nothing.
+	//
+	// --empty so no image is downloaded, and init rather than launch so the
+	// instance never starts and nothing is ever bound away from the host.
+	if out, err := exec.Command("incus", "init", "--empty", "--vm", instance).CombinedOutput(); err != nil {
+		t.Skipf("cannot init an Incus VM here: %s: %v", out, err)
 	}
 	t.Cleanup(func() { exec.Command("incus", "delete", "--force", instance).Run() })
 
@@ -292,9 +298,14 @@ func TestE2E_IncusDeviceSyntaxIsRecognised(t *testing.T) {
 	// Rejected — the question is whether Incus objected to the *keys* (adapter
 	// bug) or to the device (expected on a runner with no passthrough setup).
 	msg := strings.ToLower(err.Error())
+	// Every phrasing Incus uses when it objects to what the adapter *said*,
+	// rather than to the device. "Unsupported device type" is on this list
+	// because it was seen in CI and initially misread as a device rejection,
+	// letting a wrong target pass as a success.
 	for _, keyError := range []string{
 		"unknown device option", "invalid device option",
-		"invalid device type", "unknown device type",
+		"invalid device type", "unknown device type", "unsupported device type",
+		"unknown key", "invalid key",
 	} {
 		if strings.Contains(msg, keyError) {
 			t.Fatalf("Incus rejected the adapter's device syntax, not the device: %v", err)
