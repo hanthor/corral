@@ -60,7 +60,9 @@ VMs are cattle. Stop treating each one like a networking project.
   bootable container image and boots it as a VM. Browse/install from the web
   UI's **Extensions** tab too. The core binary stays lean.
 - **Point-and-shoot TUI.** Run `corral` bare for a Bubble Tea interface:
-  pick a VM, hit Start / Stop / SSH / VNC / Delete, or toggle which ports
+  pick a VM, hit Start / Stop / SSH / VNC / Delete, browse and restore
+  **snapshots** on any backend that has them, read a VM's **events**, mark a
+  **template**, resize CPU/RAM (VMs *and* CTs), or toggle which ports
   (SSH, VNC, RDP, HTTP, …) are published to the tailnet as
   `<name>-vm.your-tailnet.ts.net`.
 - **A Proxmox-style web UI.** `corral web` serves a dark, mobile-friendly
