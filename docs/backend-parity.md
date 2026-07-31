@@ -101,12 +101,33 @@ configured remote through `pkg/incus`, and the instance address is read. The
 demo fixture now holds both an Incus container and an Incus VM, so the split
 stays covered.
 
-**2. Generalise the adapter contract.** Grow `types.Backend` — or better, a set
-of small optional interfaces alongside it, one per operation family (`Power`,
-`Console`, `Sizing`, `Storage`, `Observability`, `Lifecycle`) — so a backend
-declares what it implements and the capability table is *derived* from that
-rather than hand-maintained. `pkg/snapshot.Adapter` is the shape to copy, and
-`pkg/backend` is where the registry belongs.
+**2. Generalise the adapter contract.** *Done:* `pkg/backend/ops.go` defines a
+small interface per operation family — `Power`, `Restarter`, `Suspender`,
+`Sizer`, `Storer`, `Mover`, `Cloner`, `Templater`, `Tagger`, `Observer`,
+`Exporter`, plus `Addresser` — and `pkg/backend/adapters.go` holds one adapter
+per backend, the only place a backend's own signature is translated. A surface
+calls `backend.For(ref)` and asserts the family it needs; it never switches on a
+backend name again.
+
+What makes it more than documentation: **support is derived from the
+assertions.** `Provides(backend, operation)` answers from the adapter's type, and
+a conformance test fails if the matrix claims an operation the adapter does not
+implement, *or* if an adapter implements one the matrix has not been updated for.
+So adding a method is how a gap gets closed, and forgetting the paperwork is a
+red build rather than a silent inconsistency.
+
+Two consequences worth knowing. `Power` is `Start`/`Stop`/`Delete` only, with
+`Restart` split into its own interface, because two backends can merely fake a
+reboot by stopping and starting — and a fake is what the contract exists to
+prevent a backend claiming. And an adapter must be constructible from a bare
+`InstanceRef`: derivation probes the type, never a live connection, so the
+mechanism works offline and in tests.
+
+The first surface converted is the TUI's power/pause/migrate path, which was a
+per-backend if/else ladder per action. The behavioural win is the refusals: the
+ladder's final `else` sent every unknown backend to local QEMU, and its pause and
+migrate branches did nothing at all off KubeVirt. Now an unsupported action names
+the backend and points here.
 
 **3. Close the gaps, cheapest-first per backend.** The lists below come from the
 matrix, so they stay current. The notes name the native mechanism, so none of

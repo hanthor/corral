@@ -22,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
+	"github.com/tuna-os/corral/pkg/backend"
 	"github.com/tuna-os/corral/pkg/ct"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/snapshot"
@@ -442,4 +443,101 @@ func newCTHWEditModel(c ct.CT) hwEditModel {
 	m := newHWEditModel(types.VM{Name: c.Name, Namespace: c.Namespace, CPU: c.CPU, Mem: c.Mem})
 	m.isCT, m.ct = true, c
 	return m
+}
+
+// ── the operation contract ────────────────────────────────────────
+
+// performBackendAction runs a power, pause, or migrate action through
+// pkg/backend's contract, and reports the outcome in the status bar.
+//
+// This is what replaced performAction's per-backend if/else ladder. The win is
+// not brevity: it is that a backend which cannot do something now *says so*.
+// The ladder's final `else` sent every unknown backend to local QEMU, and its
+// pause and migrate branches did nothing at all off KubeVirt — the operator
+// pressed a key, the fleet did not change, and nothing explained why.
+func (m *tuiModel) performBackendAction(action string) {
+	adapter, err := backend.For(m.selected.Ref())
+	if err != nil {
+		m.notice, m.noticeKind = err.Error(), "error"
+		return
+	}
+
+	var opErr error
+	switch action {
+	case "start":
+		opErr = withPower(adapter, action, func(p backend.Power) error { return p.Start(m.selected.Name) })
+	case "stop":
+		opErr = withPower(adapter, action, func(p backend.Power) error { return p.Stop(m.selected.Name) })
+	case "delete":
+		opErr = withPower(adapter, action, func(p backend.Power) error { return p.Delete(m.selected.Name) })
+	case "restart":
+		restarter, ok := adapter.(backend.Restarter)
+		if !ok {
+			opErr = unsupported(adapter, "restart")
+			break
+		}
+		opErr = restarter.Restart(m.selected.Name)
+	case "pause", "unpause":
+		suspender, ok := adapter.(backend.Suspender)
+		if !ok {
+			opErr = unsupported(adapter, "pause")
+			break
+		}
+		if action == "pause" {
+			opErr = suspender.Pause(m.selected.Name)
+		} else {
+			opErr = suspender.Resume(m.selected.Name)
+		}
+	case "migrate":
+		mover, ok := adapter.(backend.Mover)
+		if !ok {
+			opErr = unsupported(adapter, "migrate")
+			break
+		}
+		// The backend's own pre-flight, rather than Corral guessing: PVE answers
+		// this properly and names the blocking resource.
+		if can, why := mover.CanMigrate(m.selected.Name); !can {
+			opErr = fmt.Errorf("%s cannot migrate: %s", m.selected.Name, why)
+			break
+		}
+		opErr = mover.Migrate(m.selected.Name, "")
+	}
+
+	if opErr != nil {
+		m.notice, m.noticeKind = opErr.Error(), "error"
+		return
+	}
+	m.notice, m.noticeKind = fmt.Sprintf("%s: %s", m.selected.Name, pastTense(action)), "ok"
+}
+
+func withPower(adapter backend.Adapter, action string, run func(backend.Power) error) error {
+	power, ok := adapter.(backend.Power)
+	if !ok {
+		return unsupported(adapter, action)
+	}
+	return run(power)
+}
+
+// unsupported is the refusal an operator sees instead of silence. It names the
+// backend, because "not supported" without saying by what is a dead end.
+func unsupported(adapter backend.Adapter, action string) error {
+	return fmt.Errorf("the %s backend does not support %s yet — see docs/backend-parity.md",
+		adapter.Backend(), action)
+}
+
+func pastTense(action string) string {
+	switch action {
+	case "pause":
+		return "paused"
+	case "stop":
+		return "stopped"
+	case "delete":
+		return "deleted"
+	case "unpause":
+		return "resumed"
+	case "migrate":
+		return "migrating"
+	default:
+		return action + "ed"
+	}
 }
