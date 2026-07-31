@@ -193,8 +193,12 @@ Three layers, each catching what the others cannot:
   issued with the right arguments for each operation, per backend. This is where
   "does Incus LXC actually work" is answered: the commands are asserted, not the
   daemon's behaviour.
-- **Cluster e2e** (`.github/workflows/e2e.yml`) — kind plus emulated KubeVirt for
-  the cluster backend. There is no Incus or libvirt equivalent in CI yet; adding
-  an Incus job is cheap (a daemon in a container) and is the next CI gap worth
-  closing, since Incus is the backend with the most 🔨 that a human can actually
-  run on a laptop.
+- **Real-backend e2e** — `.github/workflows/e2e.yml` runs kind plus emulated
+  KubeVirt, and `.github/workflows/e2e-incus.yml` runs a real Incus daemon, a
+  real libvirt, and local QEMU on one runner: a triple-backend aggregate
+  inventory, the snapshot/export/device adapters against the real tools, and the
+  container-versus-VM split asserted in both directions (a container in
+  `ct list` and *not* in `list`, a virtual machine the other way round).
+  Proxmox cannot run in CI at all; ADR-0009 records `httptest` against recorded
+  payloads plus a documented manual pass as the honest substitute — which is the
+  same admission `docs/testing.md` makes about real KVM hardware.
