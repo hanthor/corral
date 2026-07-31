@@ -23,6 +23,16 @@ type Config struct {
 	Peers     []PeerConfig    `yaml:"peers,omitempty"`
 	Libvirt   LibvirtConfig   `yaml:"libvirt"`
 	Contexts  []ContextConfig `yaml:"contexts,omitempty"`
+	Folders   []FolderConfig  `yaml:"folders,omitempty"`
+}
+
+// FolderConfig is one stored folder (ADR-0008): a path and the instance
+// selectors it holds. Members are the string form of types.InstanceRef rather
+// than the struct, so this package stays free of domain types and pkg/folder —
+// which owns the tree semantics — can import config without a cycle.
+type FolderConfig struct {
+	Path    string   `yaml:"path" json:"path"`
+	Members []string `yaml:"members,omitempty" json:"members,omitempty"`
 }
 
 type DefaultConfig struct {
@@ -141,6 +151,27 @@ func RemoveContext(name string) error {
 	if cfg.Default.Context == name {
 		cfg.Default.Context = ""
 	}
+	return Save(cfg)
+}
+
+// Folders returns the stored folder tree, empty when none is configured.
+func Folders() []FolderConfig {
+	cfg, err := Load(DefaultPath())
+	if err != nil {
+		return nil
+	}
+	return cfg.Folders
+}
+
+// SetFolders replaces the stored folder tree. The whole document is written at
+// once because a folder move rewrites many paths, and a per-folder API would
+// leave the tree half-moved if a write failed midway.
+func SetFolders(folders []FolderConfig) error {
+	cfg, err := Load(DefaultPath())
+	if err != nil {
+		return err
+	}
+	cfg.Folders = folders
 	return Save(cfg)
 }
 
