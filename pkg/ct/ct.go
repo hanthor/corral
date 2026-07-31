@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/shell"
 )
 
@@ -563,10 +564,20 @@ func Exists(name, namespace string) bool {
 // the pod is currently running, same as a stopped VM still being a VM.
 // Live phase/readiness come from the pod when one exists; "Stopped"
 // otherwise.
+// A host with Incus and no Kubernetes is a supported deployment, so a kubectl
+// failure hides the KubeVirt CTs and nothing else: the Incus containers are
+// still listed. Before Incus containers were CTs they showed up (wrongly) in
+// the VM fleet, so returning early here would have made them unreachable from
+// any command on such a host.
 func ListCTs() ([]CT, error) {
-	pvcOut, err := run("kubectl", "get", "pvc", "-A", "-l", labelCT+"=true", "-o", "json")
-	if err != nil {
-		return nil, err
+	pvcOut, kubeErr := run("kubectl", "get", "pvc", "-A", "-l", labelCT+"=true", "-o", "json")
+	if kubeErr != nil {
+		incusCTs := listIncusCTs()
+		if len(incusCTs) == 0 {
+			// Nothing anywhere: the cluster error is the useful answer.
+			return nil, kubeErr
+		}
+		return incusCTs, nil
 	}
 	var pvcRes struct {
 		Items []struct {
@@ -704,47 +715,22 @@ func Scale(name, namespace string, cpu int, mem string) error {
 
 // ── Incus backend shim ────────────────────────────────────────────
 
-func incusExists(name string) bool {
-	cmd := exec.Command("incus", "info", name)
-	return cmd.Run() == nil
-}
+// These route through pkg/incus rather than calling exec.Command directly. The
+// direct calls they replace were untestable, invisible to demo mode, and —
+// worse — always talked to the *local* daemon, so a CT on a configured remote
+// could be listed and never started. pkg/incus.Client targets the remote the
+// operator selected, and already handles the already-running / already-stopped
+// cases these duplicated.
 
-func incusStart(name string) error {
-	cmd := exec.Command("incus", "start", name)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "already running") {
-			return nil
-		}
-		return fmt.Errorf("incus start %s: %s (%w)", name, string(out), err)
-	}
-	return nil
-}
+func incusCTClient() incus.Client { return incus.NewClient("") }
 
-func incusStop(name string) error {
-	cmd := exec.Command("incus", "stop", name)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "already stopped") || strings.Contains(string(out), "not running") {
-			return nil
-		}
-		force := exec.Command("incus", "stop", name, "--force")
-		if force.Run() == nil {
-			return nil
-		}
-		return fmt.Errorf("incus stop %s: %s (%w)", name, string(out), err)
-	}
-	return nil
-}
+func incusExists(name string) bool { return incusCTClient().Exists(name) }
 
-func incusDelete(name string) error {
-	cmd := exec.Command("incus", "delete", name, "--force")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("incus delete %s: %s (%w)", name, string(out), err)
-	}
-	return nil
-}
+func incusStart(name string) error { return incusCTClient().Start(name) }
+
+func incusStop(name string) error { return incusCTClient().Stop(name) }
+
+func incusDelete(name string) error { return incusCTClient().Delete(name) }
 
 func createIncus(opts CreateOpts) error {
 	args := []string{"launch", opts.Image, opts.Name}
@@ -768,20 +754,15 @@ func createIncus(opts CreateOpts) error {
 	return nil
 }
 
+// listIncusCTs returns the Incus *containers* as CTs.
+//
+// It used to list every instance, so an Incus virtual machine appeared as a CT
+// while pkg/incus.List listed the same instance as a VM — every Incus instance
+// was in the fleet twice. Containers are CTs, virtual machines are VMs, and
+// pkg/incus.Containers is what draws the line.
 func listIncusCTs() []CT {
-	cmd := exec.Command("incus", "list", "--format=json")
-	out, err := cmd.Output()
+	instances, err := incusCTClient().Containers()
 	if err != nil {
-		return nil
-	}
-	var instances []struct {
-		Name       string            `json:"name"`
-		Status     string            `json:"status"`
-		StatusCode int               `json:"status_code"`
-		Location   string            `json:"location"`
-		Config     map[string]string `json:"config"`
-	}
-	if err := json.Unmarshal(out, &instances); err != nil {
 		return nil
 	}
 	var cts []CT
@@ -795,6 +776,9 @@ func listIncusCTs() []CT {
 			Name: inst.Name, Phase: inst.Status, Ready: running,
 			CPU: cpu, Mem: inst.Config["limits.memory"],
 			Node: inst.Location, Backend: "incus",
+			// Incus containers are unprivileged unless told otherwise, the same
+			// default PVE uses and the one ADR-0005 models.
+			Privileged: inst.Config["security.privileged"] == "true",
 		})
 	}
 	return cts

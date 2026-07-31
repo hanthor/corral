@@ -210,7 +210,18 @@ func (d *demoCluster) dispatch(stdin, name string, args []string) ([]byte, error
 
 	if filepath.Base(name) == "incus" {
 		if len(args) >= 1 && args[0] == "list" {
-			return []byte(`[{"name":"incus-demo-container","type":"container","status":"Running","status_code":103,"location":"localhost","config":{"limits.cpu":"2","limits.memory":"2Gi"}}]`), nil
+			// One container and one virtual machine: Incus hosts both, and
+			// Corral models them as different things (a container is a CT, a
+			// VM is a VM). A single-container fixture hid that split, and with
+			// it the bug where every Incus instance was listed twice.
+			return []byte(`[` +
+				`{"name":"incus-demo-container","type":"container","status":"Running","status_code":103,` +
+				`"location":"localhost","config":{"limits.cpu":"2","limits.memory":"2Gi"},` +
+				`"state":{"network":{"eth0":{"addresses":[{"family":"inet","address":"10.60.0.21","scope":"global"}]}}}},` +
+				`{"name":"incus-demo-vm","type":"virtual-machine","status":"Running","status_code":103,` +
+				`"location":"localhost","config":{"limits.cpu":"4","limits.memory":"4Gi"},` +
+				`"state":{"network":{"enp5s0":{"addresses":[{"family":"inet","address":"10.60.0.22","scope":"global"}]}}}}` +
+				`]`), nil
 		}
 		return []byte{}, nil
 	}

@@ -31,7 +31,14 @@ check(await page.locator('#tree >> text=Datacenter').count() > 0, 'tree renders'
 check(await page.locator('td:has-text("web-prod")').count() > 0, 'VM table lists the fleet');
 check(await page.locator('.chip.filter').count() > 2, 'tag filter bar populated');
 check(await page.locator('#tree >> text=laptop-dev').count() > 0, 'local demo VM in the tree');
-check(await page.locator('td:has-text("incus-demo-container")').count() > 0, 'Incus demo container in VM table');
+// The demo Incus remote holds one virtual machine and one container, and the
+// UI must place each on its own surface: the VM in the fleet table, the
+// container in the tree as a CT and nowhere in the VM table. That last
+// assertion is the bug this replaces — the container used to be listed as a
+// VM *and* as a CT, so checking for it in the table was checking for the bug.
+check(await page.locator('td:has-text("incus-demo-vm")').count() > 0, 'Incus demo VM in VM table');
+check(await page.locator('td:has-text("incus-demo-container")').count() === 0, 'Incus demo container is not in the VM table');
+check(await page.locator('#tree >> text=incus-demo-container').count() > 0, 'Incus demo container in the tree as a CT');
 
 // VM summary.
 await page.click('#tree >> text=web-prod');

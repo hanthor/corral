@@ -44,6 +44,10 @@ func RunContexts(contexts []config.ContextConfig) []Check {
 		case "libvirt":
 			runner = base
 			checks = libvirtChecks(target.Context)
+		case "proxmox":
+			// No runner: this backend speaks HTTP, so the probe is an API call
+			// rather than a command.
+			checks = proxmoxChecks(target.Name, target.Context)
 		default:
 			checks = []Check{{Name: "Backend supported", Detail: fmt.Sprintf("unknown backend %q", target.Backend), Severity: "required"}}
 		}
