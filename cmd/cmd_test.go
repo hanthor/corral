@@ -798,14 +798,17 @@ func TestCtToItem_ShowsPhaseAndPrivilege(t *testing.T) {
 }
 
 func TestActionsListItemsCT_NoHypervisorConcepts(t *testing.T) {
-	for _, forbidden := range []string{"migrate", "snapshot", "hardware", "ports", "clone", "ssh"} {
+	// "hardware" is not on this list: scaling a CT's CPU/RAM is a pod resize
+	// (ct.Scale), which the web UI has always offered via
+	// PUT /api/cts/{ns}/{name}/scale — it is not a hypervisor concept.
+	for _, forbidden := range []string{"migrate", "snapshot", "ports", "clone", "ssh"} {
 		for _, a := range actionsListItemsCT {
 			if a.id == forbidden {
 				t.Errorf("CT actions list should not include %q (a hypervisor/VM-only concept)", forbidden)
 			}
 		}
 	}
-	for _, want := range []string{"start", "stop", "console", "delete"} {
+	for _, want := range []string{"start", "stop", "console", "hardware", "delete"} {
 		found := false
 		for _, a := range actionsListItemsCT {
 			if a.id == want {

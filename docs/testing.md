@@ -17,8 +17,13 @@
 - **Cluster e2e** (`.github/workflows/e2e.yml`): kind + emulated KubeVirt on
   GitHub runners — real `kubectl`/`virtctl` against a real API server.
 
-Remaining known gaps: TUI interaction tests (Bubble Tea update loop is only
-covered indirectly), plugin marketplace fetch/download, `config/` and
+The TUI's update loop is driven directly in `cmd/tui_flows_test.go` (list,
+context cycling, quick keys, actions gating, confirm/clone/ports/hardware
+forms, doctor, help) and `cmd/tui_views_test.go` (snapshots, events, template
+mark, CT scaling) — keypress in, state and rendered output out, against the
+in-memory demo cluster or a scripted `shell.Fake`.
+
+Remaining known gaps: plugin marketplace fetch/download, `config/` and
 `catalog/` remain thin, and nothing exercises real KVM hardware in CI.
 
 ---
@@ -257,8 +262,10 @@ jobs:
 
 ## What NOT to test
 
-- **TUI rendering** — Bubble Tea's rendering is a framework concern. Test
-  the action dispatch logic, not terminal output.
+- **TUI layout** — how Bubble Tea and lipgloss lay out a frame is a framework
+  concern. Assert on dispatch and on the *content* a view puts on screen (does
+  it name the instance, does it surface the backend's refusal), never on
+  padding, borders, or column positions.
 - **kubectl/virtctl correctness** — those are upstream tools. Test that we
   pass the right flags, not that they work.
 - **Go `net/http` routing** — the stdlib is tested. Test the handler logic,

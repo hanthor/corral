@@ -127,7 +127,9 @@ var actionsListItems = []actionItem{
 	{id: "migrate", label: "Migrate"},
 	{id: "clone", label: "Clone"},
 	{id: "hardware", label: "Edit CPU / RAM"},
-	{id: "snapshot", label: "Snapshot"},
+	{id: "snapshot", label: "Snapshots"},
+	{id: "template", label: "Make template"},
+	{id: "events", label: "Events"},
 	{id: "export", label: "Export (backup disk)"},
 	{id: "ssh", label: "SSH"},
 	{id: "viewer", label: "Viewer (VNC)"},
@@ -154,7 +156,7 @@ func actionApplies(id string, vm types.VM) bool {
 		return vm.Capabilities.Migrate && vm.Running && !paused
 	case "snapshot":
 		return vm.Capabilities.Snapshots
-	case "hardware", "ports", "clone", "export":
+	case "hardware", "ports", "clone", "export", "template", "events":
 		return vm.Backend == "kubevirt"
 	case "ssh", "viewer":
 		if id == "ssh" {
@@ -179,6 +181,16 @@ func ctActionApplies(id string, c ct.CT) bool {
 	}
 }
 
+// templateActionLabel names the template action for the mark the VM already
+// carries, the way the web UI's button flips between the two — a single
+// "Toggle template" would leave the operator guessing which way it goes.
+func templateActionLabel(vm types.VM) string {
+	if vm.IsTemplate {
+		return "Unmark template"
+	}
+	return "Make template"
+}
+
 // CT actions are a small, distinct set — no migrate/snapshot/hardware-edit/
 // ports/clone, since those are VM (hypervisor) concepts a plain pod doesn't
 // have. "Console" replaces "SSH": a CT is reached by kubectl exec, not a
@@ -187,6 +199,7 @@ var actionsListItemsCT = []actionItem{
 	{id: "start", label: "Start"},
 	{id: "stop", label: "Stop"},
 	{id: "console", label: "Console"},
+	{id: "hardware", label: "Edit CPU / RAM"},
 	{id: "delete", label: "Delete"},
 }
 
@@ -196,7 +209,11 @@ type tuiModel struct {
 	list        list.Model
 	actionsList list.Model
 	quitting    bool
-	state       string // "list", "actions", "edit", "hwedit", "confirmDelete", "doctor", "cloneInput"
+	state       string // "list", "actions", "edit", "hwedit", "confirmDelete", "doctor", "cloneInput", "snapshots", "events"
+	// snapshots and events are the web UI's per-VM tabs as states of this
+	// model — see cmd/tui_views.go.
+	snapshots   snapshotsState
+	events      eventsState
 	selected    types.VM
 	isCT        bool // true when the actions menu / performAction target is selectedCT, not selected
 	selectedCT  ct.CT
@@ -277,6 +294,9 @@ func (m *tuiModel) newActionsList() list.Model {
 		}
 		if !m.isCT && m.selected.Name != "" && !actionApplies(a.id, m.selected) {
 			continue
+		}
+		if a.id == "template" && !m.isCT {
+			a.label = templateActionLabel(m.selected)
 		}
 		listItems = append(listItems, a)
 	}
@@ -411,67 +431,28 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.state == "actions" {
-			switch msg.String() {
-			case "esc":
-				m.state = "list"
-				return m, nil
-			case "q", "ctrl+c":
+		if m.state == "snapshots" {
+			if msg.String() == "ctrl+c" {
 				m.quitting = true
 				return m, tea.Quit
-			case "enter":
-				if item, ok := m.actionsList.SelectedItem().(actionItem); ok {
-					switch item.id {
-					case "ports":
-						m.state = "edit"
-						m.edit = newEditModel(m.selected)
-						return m, m.edit.Init()
-					case "hardware":
-						m.state = "hwedit"
-						m.hwEdit = newHWEditModel(m.selected)
-						return m, m.hwEdit.Init()
-					case "clone":
-						m.state = "cloneInput"
-						m.cloneErr = ""
-						m.cloneInput = newCloneInput(m.selected.Name)
-						return m, m.cloneInput.Focus()
-					case "start", "stop", "restart", "pause", "unpause", "migrate", "snapshot":
-						m.performAction(item.id)
-						m.refreshList()
-						m.state = "list"
-						return m, nil
-					case "ssh", "viewer", "export":
-						actionID := item.id
-						postQuitAction = func() { m.performAction(actionID) }
-						m.quitting = true
-						return m, tea.Quit
-					case "console":
-						name, ns := m.selectedCT.Name, m.selectedCT.Namespace
-						postQuitAction = func() { ct.Console(name, ns) }
-						m.quitting = true
-						return m, tea.Quit
-					case "delete":
-						m.state = "confirmDelete"
-						return m, nil
-					}
-				}
 			}
-			var cmd tea.Cmd
-			m.actionsList, cmd = m.actionsList.Update(msg)
-			return m, cmd
+			if !m.updateSnapshots(msg) {
+				m.state = "actions"
+				// A restore or a delete changes what the list shows.
+				m.refreshList()
+			}
+			return m, nil
 		}
 
-		if m.state == "confirmDelete" {
+		if m.state == "events" {
 			switch msg.String() {
-			case "y", "Y":
-				m.performAction("delete")
-				m.refreshList()
-				m.state = "list"
 			case "ctrl+c":
 				m.quitting = true
 				return m, tea.Quit
-			default:
+			case "esc", "q", "enter":
 				m.state = "actions"
+			case "r":
+				m.events = newEventsState(m.selected)
 			}
 			return m, nil
 		}
@@ -493,14 +474,34 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, m.edit.Init()
 					case "hardware":
 						m.state = "hwedit"
-						m.hwEdit = newHWEditModel(m.selected)
+						if m.isCT {
+							m.hwEdit = newCTHWEditModel(m.selectedCT)
+						} else {
+							m.hwEdit = newHWEditModel(m.selected)
+						}
 						return m, m.hwEdit.Init()
 					case "clone":
 						m.state = "cloneInput"
 						m.cloneErr = ""
 						m.cloneInput = newCloneInput(m.selected.Name)
 						return m, m.cloneInput.Focus()
-					case "start", "stop", "restart", "pause", "unpause", "migrate", "snapshot":
+					case "snapshot":
+						// Parity with the web UI's Snapshots tab: the action
+						// opens the captures the VM already has rather than
+						// silently taking one more.
+						m.snapshots = newSnapshotsState(m.selected)
+						m.state = "snapshots"
+						return m, nil
+					case "events":
+						m.events = newEventsState(m.selected)
+						m.state = "events"
+						return m, nil
+					case "template":
+						m.toggleTemplate()
+						m.refreshList()
+						m.state = "list"
+						return m, nil
+					case "start", "stop", "restart", "pause", "unpause", "migrate":
 						m.performAction(item.id)
 						m.refreshList()
 						m.state = "list"
@@ -660,10 +661,6 @@ func (m *tuiModel) performAction(action string) {
 	case "migrate":
 		if backend == "kubevirt" {
 			kubevirt.NewClientForContext(ns, contextName).Migrate(name, "")
-		}
-	case "snapshot":
-		if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).Snapshot(name, "")
 		}
 	case "export":
 		if backend == "kubevirt" {
@@ -895,6 +892,14 @@ func (m tuiModel) render() string {
 		return m.doctorView()
 	}
 
+	if m.state == "snapshots" {
+		return m.snapshotsView()
+	}
+
+	if m.state == "events" {
+		return m.eventsView()
+	}
+
 	if m.state == "confirmDelete" {
 		name, what := m.selected.Name, "and its disks"
 		if m.isCT {
@@ -1045,9 +1050,11 @@ func tuiHelpView() string {
 		"  /            fuzzy search name, ID, backend, context, node, or IP\n" +
 		"  tab / [ ]    cycle all and individual contexts\n" +
 		"  enter        capability-aware actions\n" +
+		"               (power, migrate, clone, snapshots, events, template,\n" +
+		"                hardware, ports, export, ssh, viewer, delete)\n" +
 		"  s / x        quick start / graceful stop\n" +
 		"  r            refresh every backend\n" +
-		"  d            backend diagnostics\n" +
+		"  d            doctor: backend diagnostics\n" +
 		"  q            quit\n\n" + tuiHelp.Render("  press any key to return")
 }
 
@@ -1177,7 +1184,9 @@ func (m editModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.ports) {
 				m.cursor++
 			}
-		case " ", "enter":
+		// Bubble Tea v2 names the space key "space"; the old " " never
+		// matches, which left the documented space-to-toggle binding dead.
+		case " ", "space", "enter":
 			if m.cursor < len(m.ports) {
 				p := m.ports[m.cursor]
 				m.toggled[p] = !m.toggled[p]
@@ -1296,9 +1305,14 @@ func (m editModel) render() string {
 // ── Hardware edit (CPU / RAM) ─────────────────────────────────────
 
 type hwEditModel struct {
-	vm     types.VM
-	cpu    textinput.Model
-	mem    textinput.Model
+	vm  types.VM
+	cpu textinput.Model
+	mem textinput.Model
+	// isCT switches apply() to ct.Scale. The web UI scales a CT from the same
+	// form it scales a VM from, so the editor is shared rather than copied —
+	// only the call at the end and the note under it differ.
+	isCT   bool
+	ct     ct.CT
 	focus  int // 0 = cpu, 1 = mem
 	status string
 	done   bool
@@ -1340,7 +1354,9 @@ func (m hwEditModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 		case "enter":
 			m.apply()
-			m.done = true
+			// A failed scale keeps the form open with the reason on screen —
+			// closing it would drop the only copy of the error.
+			m.done = m.status == ""
 			return m, nil
 		}
 	}
@@ -1357,6 +1373,23 @@ func (m *hwEditModel) apply() {
 	ns := m.vm.Namespace
 	if ns == "" {
 		ns = "default"
+	}
+	if m.isCT {
+		cpu := m.ct.CPU
+		if v, err := strconv.Atoi(strings.TrimSpace(m.cpu.Value())); err == nil && v > 0 {
+			cpu = v
+		}
+		mem := strings.TrimSpace(m.mem.Value())
+		if mem == "" {
+			mem = m.ct.Mem
+		}
+		if cpu == m.ct.CPU && mem == m.ct.Mem {
+			return
+		}
+		if err := ct.Scale(m.ct.Name, ns, cpu, mem); err != nil {
+			m.status = err.Error()
+		}
+		return
 	}
 	c := kubevirt.NewClient(ns)
 	if v, err := strconv.Atoi(strings.TrimSpace(m.cpu.Value())); err == nil && v > 0 && v != m.vm.CPU {
@@ -1380,10 +1413,16 @@ func (m hwEditModel) render() string {
 	sb.WriteString(fmt.Sprintf("%svCPUs   %s\n", cpuMark, m.cpu.View()))
 	sb.WriteString(fmt.Sprintf("%sMemory  %s\n", memMark, m.mem.View()))
 	note := "applies live (hotplug)"
-	if !m.vm.LiveMigratable {
+	switch {
+	case m.isCT:
+		note = "resized in place where the cluster allows it, otherwise stop/start to apply"
+	case !m.vm.LiveMigratable:
 		note = "VM will restart to apply"
 	}
 	sb.WriteString("\n" + tuiHelp.Render("  "+note))
+	if m.status != "" {
+		sb.WriteString("\n" + tuiStopped.Render("  "+m.status))
+	}
 	sb.WriteString("\n" + tuiHelp.Render("  tab switch  enter apply  esc cancel"))
 	return sb.String()
 }

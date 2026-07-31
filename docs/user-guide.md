@@ -126,7 +126,19 @@ hiding healthy instances.
 - `/` fuzzy-searches names, canonical IDs, backends, contexts, nodes, and IPs.
 - `Tab`, `[` and `]` cycle between the complete fleet and named contexts.
 - `Enter` opens a capability-aware action menu; unsupported operations are
-  absent rather than failing after selection.
+  absent rather than failing after selection. Power (start/stop/restart/
+  pause/resume), migrate, clone, snapshots, events, the template mark,
+  CPU/RAM, published ports, export, SSH, VNC, and delete all live there.
+- **Snapshots** opens the instance's captures: `n` takes one (named or
+  auto-named), `Enter` restores, `x` deletes, `r` reloads. Every backend that
+  can snapshot is supported — KubeVirt, libvirt, Incus, and local QEMU — and
+  each capture reports what it actually caught (offline, filesystem, or
+  crash-consistent), same as the web UI's Snapshots tab.
+- **Events** shows the recent Kubernetes events for a KubeVirt VM and its
+  `virt-launcher` pod, newest first.
+- **Make/Unmark template** flips the golden-template label that
+  `corral clone` copies from.
+- CTs get their own smaller menu — start, stop, console, CPU/RAM, delete.
 - `s` and `x` quickly start or stop the selected VM; `r` refreshes every
   backend.
 - `d` runs scoped QEMU, KubeVirt, Incus, and libvirt diagnostics.
