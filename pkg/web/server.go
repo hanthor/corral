@@ -132,6 +132,7 @@ func newMux() (http.Handler, error) {
 	mux.HandleFunc("DELETE /api/datavolumes/{ns}/{name}", handleDeleteDataVolume)
 	mux.HandleFunc("GET /api/tasks/{id}", handleTaskStatus)
 	mux.HandleFunc("GET /api/tasklog", handleTaskLog)
+	registerFolderRoutes(mux)
 	mux.HandleFunc("GET /api/vms/{ns}/{name}", handleVMInfo)
 	mux.HandleFunc("POST /api/vms/{ns}/{name}/{action}", handleVMAction)
 	mux.HandleFunc("DELETE /api/vms/{ns}/{name}", handleDeleteVM)

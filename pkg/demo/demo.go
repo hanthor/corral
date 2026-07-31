@@ -312,9 +312,17 @@ func (d *demoCluster) dispatch(stdin, name string, args []string) ([]byte, error
 }
 
 func (d *demoCluster) virtctl(args []string) ([]byte, error) {
-	v := d.find(args[1], flagValue(args, "-n"))
+	// Some virtctl subcommands name the resource kind before the name
+	// ("virtctl pause vm web-prod") and some do not ("virtctl start web-prod").
+	// Reading args[1] blindly made pause and unpause look for a VM called "vm",
+	// so demo mode's pause button failed while start and stop worked.
+	name := args[1]
+	if (name == "vm" || name == "vmi") && len(args) > 2 {
+		name = args[2]
+	}
+	v := d.find(name, flagValue(args, "-n"))
 	if v == nil {
-		return nil, fmt.Errorf("VM %q not found", args[1])
+		return nil, fmt.Errorf("VM %q not found", name)
 	}
 	switch args[0] {
 	case "start":
