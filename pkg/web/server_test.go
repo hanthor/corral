@@ -167,7 +167,38 @@ func TestHandleListVMs_OneVM(t *testing.T) {
 	}
 }
 
-func TestHandleListVMs_KubectlError(t *testing.T) {
+// A failing NON-default backend (here KubeVirt, on a qemu-default host with a
+// stray kubeconfig) must not produce the full-page offline error: the default
+// backend (qemu) listed fine, just empty. The dashboard renders an empty fleet
+// and the KubeVirt failure is a silent partial (#91).
+func TestHandleListVMs_NonDefaultBackendError_NotOffline(t *testing.T) {
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	fx.Runner.AddResponseKV("kubectl", []string{"get", "vms", "-A", "-o", "json"},
+		"", fmt.Errorf("kubectl: connection refused"))
+
+	resp := mustGet(t, fx.Server.URL+"/api/vms")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200 (qemu is the default backend and listed fine)", resp.StatusCode)
+	}
+	if resp.Header.Get("X-Corral-Partial") != "true" {
+		t.Error("expected X-Corral-Partial header flagging the KubeVirt failure")
+	}
+	var vms []map[string]any
+	json.NewDecoder(resp.Body).Decode(&vms)
+	if len(vms) != 0 {
+		t.Errorf("expected empty fleet, got %d", len(vms))
+	}
+}
+
+// When the user's PRIMARY backend is the one that's down and there's nothing to
+// show, the offline (502) state is still correct — that's the real "connect a
+// cluster" case for a KubeVirt-default deployment.
+func TestHandleListVMs_DefaultBackendDown_Offline(t *testing.T) {
+	t.Setenv("CORRAL_DEFAULT_BACKEND", "kubevirt")
 	fx := NewTestFixture()
 	defer fx.Close()
 
@@ -180,7 +211,6 @@ func TestHandleListVMs_KubectlError(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", resp.StatusCode)
 	}
-
 	var body map[string]string
 	json.NewDecoder(resp.Body).Decode(&body)
 	if body["error"] == "" {

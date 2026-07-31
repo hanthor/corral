@@ -828,6 +828,9 @@ func TestHandleScale_MissingBody(t *testing.T) {
 // ── Error paths ──────────────────────────────────────────────────
 
 func TestHandleListVMs_KubectlDown(t *testing.T) {
+	// Offline (502) is correct only when KubeVirt is the primary backend — see
+	// TestHandleListVMs_NonDefaultBackendError_NotOffline for the qemu-default case.
+	t.Setenv("CORRAL_DEFAULT_BACKEND", "kubevirt")
 	fx := NewTestFixture()
 	defer fx.Server.Close()
 

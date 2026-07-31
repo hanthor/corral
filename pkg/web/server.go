@@ -257,16 +257,19 @@ func statusFor(err error) int {
 func handleListVMs(w http.ResponseWriter, r *http.Request) {
 	result := fleet.List(r.Context())
 	vms := append(result.VMs, peerVMs()...)
-	// Nothing to show and a remote backend that can't be reached is the "No
-	// cluster connected" case the dashboard renders setup guidance for, so it
-	// has to surface as an error rather than an empty fleet. A qemu-only
-	// deployment has no remote contexts at all (see config.Contexts) and so can
-	// never trip this; a failing local qemu listing alone never means "no
-	// cluster", which is why only remote errors count.
+	// The full-page "No cluster connected" state is only appropriate when the
+	// user's PRIMARY backend is the one that failed and there is nothing to
+	// show. A qemu-default host with a stray kubeconfig (which makes KubeVirt a
+	// configured-but-unused context, see config.Contexts) must never get a
+	// cluster nag over a backend it doesn't drive — its default backend listed
+	// fine, just empty. So only surface offline when the default context itself
+	// errored; otherwise a failing non-default backend is a silent partial.
 	if len(vms) == 0 && len(config.Peers()) == 0 {
-		if bad := remoteErrors(result.Errors); bad != "" {
-			errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %s", bad))
-			return
+		if _, primaryFailed := result.Errors[config.DefaultContext().Name]; primaryFailed {
+			if bad := remoteErrors(result.Errors); bad != "" {
+				errResp(w, http.StatusBadGateway, fmt.Errorf("listing VMs: %s", bad))
+				return
+			}
 		}
 	}
 	if vms == nil {

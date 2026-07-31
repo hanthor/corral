@@ -253,66 +253,77 @@ Boot a container image as a VM? Install the bootc extension:
 			}
 		}
 
-		if existing := resolveBackend(name); existing != "" && !createForce {
-			return fmt.Errorf("VM %q already exists (backend: %s). Use --force to overwrite", name, existing)
-		}
+		return executeCreate(name, cmd.Flags().Changed("kubevirt"))
+	},
+}
 
-		if createBootc != "" {
-			// Backend auto-selection: honor an explicit --kubevirt/-k, otherwise
-			// use KubeVirt when a cluster is reachable and fall back to local
-			// QEMU. One command, right backend, no flag juggling.
-			useKubevirt := createKubevirt
-			if !cmd.Flags().Changed("kubevirt") {
-				useKubevirt = kubevirt.Reachable()
-			}
-			if useKubevirt {
-				return runKubevirtBootcCreate(name)
-			}
-			if err := runLocalBootcCreate(name); err != nil {
-				return err
-			}
-			return maybeStartAndWait(name)
-		}
+// executeCreate runs the backend-selection and dispatch that turns the
+// create* package vars into a VM. It is shared by the `corral create` CLI
+// command and the TUI create form (cmd/tui_create.go) so both stay in lockstep
+// — one place decides which backend and create path a given set of options maps
+// to. kubevirtExplicit reports whether the caller explicitly chose KubeVirt
+// (the CLI's --kubevirt flag, or the TUI's backend picker); it governs bootc's
+// otherwise-automatic backend selection.
+func executeCreate(name string, kubevirtExplicit bool) error {
+	if existing := resolveBackend(name); existing != "" && !createForce {
+		return fmt.Errorf("VM %q already exists (backend: %s). Use --force to overwrite", name, existing)
+	}
 
-		backend := config.DefaultBackend()
-		if rootBackend != "" {
-			backend = rootBackend
-		} else if rootContext != "" {
-			if target, ok := config.FindContext(rootContext); ok {
-				backend = target.Backend
-			}
+	if createBootc != "" {
+		// Backend auto-selection: honor an explicit KubeVirt choice, otherwise
+		// use KubeVirt when a cluster is reachable and fall back to local
+		// QEMU. One command, right backend, no flag juggling.
+		useKubevirt := createKubevirt
+		if !kubevirtExplicit {
+			useKubevirt = kubevirt.Reachable()
 		}
-		if createIncus {
-			backend = "incus"
+		if useKubevirt {
+			return runKubevirtBootcCreate(name)
 		}
-		if createKubevirt {
-			backend = "kubevirt"
-		}
-		// KubeVirt-only source flags remain an explicit signal for backwards compatibility.
-		if backend == "qemu" && !createIncus && (createImage != "" || createImport != "" || createContainerDisk != "" || createPVC != "") {
-			backend = "kubevirt"
-		}
-		if backend == "incus" {
-			return runIncusCreate(name)
-		}
-		if backend == "libvirt" {
-			if err := libvirt.NewClient("").Create(types.CreateOpts{Name: name, CPU: createCPU, Mem: createMem, Disk: createDisk, ISO: createISO, QCOW: createQCOW}); err != nil {
-				return err
-			}
-			if registryStore != nil {
-				return registryStore.Set(name, types.RegistryEntry{Backend: "libvirt"})
-			}
-			return nil
-		}
-
-		if backend == "kubevirt" {
-			return runKubevirtCreate(name)
-		}
-		if err := runQemuCreate(name); err != nil {
+		if err := runLocalBootcCreate(name); err != nil {
 			return err
 		}
 		return maybeStartAndWait(name)
-	},
+	}
+
+	backend := config.DefaultBackend()
+	if rootBackend != "" {
+		backend = rootBackend
+	} else if rootContext != "" {
+		if target, ok := config.FindContext(rootContext); ok {
+			backend = target.Backend
+		}
+	}
+	if createIncus {
+		backend = "incus"
+	}
+	if createKubevirt {
+		backend = "kubevirt"
+	}
+	// KubeVirt-only source flags remain an explicit signal for backwards compatibility.
+	if backend == "qemu" && !createIncus && (createImage != "" || createImport != "" || createContainerDisk != "" || createPVC != "") {
+		backend = "kubevirt"
+	}
+	if backend == "incus" {
+		return runIncusCreate(name)
+	}
+	if backend == "libvirt" {
+		if err := libvirt.NewClient("").Create(types.CreateOpts{Name: name, CPU: createCPU, Mem: createMem, Disk: createDisk, ISO: createISO, QCOW: createQCOW}); err != nil {
+			return err
+		}
+		if registryStore != nil {
+			return registryStore.Set(name, types.RegistryEntry{Backend: "libvirt"})
+		}
+		return nil
+	}
+
+	if backend == "kubevirt" {
+		return runKubevirtCreate(name)
+	}
+	if err := runQemuCreate(name); err != nil {
+		return err
+	}
+	return maybeStartAndWait(name)
 }
 
 func init() {

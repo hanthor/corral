@@ -22,6 +22,7 @@ import (
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/libvirt"
+	"github.com/tuna-os/corral/pkg/plugin"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -222,6 +223,8 @@ type tuiModel struct {
 	doctorRows  []doctor.Check
 	cloneInput  textinput.Model
 	cloneErr    string
+	create      createModel
+	plugins     pluginsModel
 	width       int
 	height      int
 	allItems    []list.Item
@@ -372,6 +375,33 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleMouse(msg)
 		return m, nil
 
+	case pluginsLoadedMsg:
+		m.plugins.loading = false
+		if msg.err != nil {
+			m.plugins.err = msg.err.Error()
+		} else {
+			m.plugins.entries = msg.entries
+			if m.plugins.cursor >= len(msg.entries) {
+				m.plugins.cursor = 0
+			}
+		}
+		return m, nil
+
+	case pluginActionMsg:
+		m.plugins.busy = false
+		if msg.err != nil {
+			m.plugins.err = fmt.Sprintf("%s %s failed: %v", msg.verb, msg.name, msg.err)
+			m.plugins.notice = ""
+			return m, nil
+		}
+		// A plugin may add backends or commands, so refresh the installed set.
+		m.plugins.installed = map[string]string{}
+		for _, p := range plugin.Installed() {
+			m.plugins.installed[p.Name] = p.Version
+		}
+		m.plugins.err, m.plugins.notice = "", fmt.Sprintf("%s %s", msg.verb, msg.name)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		if m.showHelp {
 			m.showHelp = false
@@ -394,6 +424,48 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.hwEdit.done {
 				m.state = "list"
 				m.refreshList()
+				return m, nil
+			}
+			return m, cmd
+		}
+
+		if m.state == "create" {
+			cm, cmd, action := m.create.Update(msg)
+			m.create = cm
+			switch action {
+			case crCancel:
+				if msg.String() == "ctrl+c" {
+					m.quitting = true
+					return m, tea.Quit
+				}
+				m.state = "list"
+				return m, nil
+			case crSubmit:
+				name := strings.TrimSpace(m.create.name.Value())
+				m.busy, m.busyLabel = true, "Creating "+name
+				if err := applyCreate(m.create); err != nil {
+					m.busy = false
+					m.create.err = err.Error()
+					return m, nil
+				}
+				m.busy = false
+				m.refreshList()
+				m.state = "list"
+				m.notice, m.noticeKind = "Created "+name, "ok"
+				return m, nil
+			}
+			return m, cmd
+		}
+
+		if m.state == "plugins" {
+			pm, cmd, back := m.plugins.Update(msg)
+			m.plugins = pm
+			if back && msg.String() == "ctrl+c" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			if back {
+				m.state = "list"
 				return m, nil
 			}
 			return m, cmd
@@ -502,6 +574,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			m.quitting = true
 			return m, tea.Quit
+		case "c":
+			m.create = newCreateModel()
+			m.state = "create"
+			return m, m.create.syncFocus()
+		case "p":
+			m.plugins = newPluginsModel()
+			m.state = "plugins"
+			return m, fetchPluginsCmd()
 		case "d":
 			m.doctorRows = fleetDiagnosis()
 			m.state = "doctor"
@@ -881,6 +961,14 @@ func (m tuiModel) render() string {
 		return m.hwEdit.render()
 	}
 
+	if m.state == "create" {
+		return m.create.render(m.th, m.width)
+	}
+
+	if m.state == "plugins" {
+		return m.plugins.render(m.th, m.width)
+	}
+
 	if m.state == "cloneInput" {
 		var sb strings.Builder
 		sb.WriteString(tuiTitle.Render(fmt.Sprintf(" Clone %s ", m.selected.Name)))
@@ -944,8 +1032,8 @@ func (m tuiModel) render() string {
 	// The bindings that work in this state, not every binding there is.
 	hints := []keyHint{
 		{"/", "search"}, {"tab", "context"}, {"enter", "actions"},
-		{"s", "start"}, {"x", "stop"}, {"r", "refresh"},
-		{"d", "doctor"}, {"?", "help"}, {"q", "quit"},
+		{"c", "create"}, {"s", "start"}, {"x", "stop"}, {"r", "refresh"},
+		{"p", "extensions"}, {"d", "doctor"}, {"?", "help"}, {"q", "quit"},
 	}
 	notice, noticeStyle := m.notice, m.th.muted
 	switch m.noticeKind {
@@ -1058,6 +1146,8 @@ func tuiHelpView() string {
 		"  enter        capability-aware actions\n" +
 		"               (power, migrate, clone, snapshots, events, template,\n" +
 		"                hardware, ports, export, ssh, viewer, delete)\n" +
+		"  c            create a VM\n" +
+		"  p            extensions (marketplace)\n" +
 		"  s / x        quick start / graceful stop\n" +
 		"  r            refresh every backend\n" +
 		"  d            doctor: backend diagnostics\n" +

@@ -419,6 +419,13 @@ func (e *Entry) Compatible() error {
 	if err != nil {
 		return nil
 	}
+	// A 0.0.0 version is an untagged dev/rolling build — a Go pseudo-version
+	// (v0.0.0-<time>-<commit>) or a plain `go build` with no -X cmd.version. It
+	// carries no real ordering, so don't gate plugins out of it, the same way
+	// unknown/git- builds are exempt above. Real releases are never 0.0.0.
+	if v.Major() == 0 && v.Minor() == 0 && v.Patch() == 0 {
+		return nil
+	}
 	c, _ := semver.NewConstraint(e.Corral)
 	if !c.Check(v) {
 		return fmt.Errorf("%s %s requires corral %s (running %s)", e.Name, e.Version, e.Corral, CurrentVersion)

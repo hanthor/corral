@@ -120,6 +120,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # tags, so `git describe` can stamp a real version
 
       - uses: actions/setup-go@v7
         with:
@@ -128,9 +130,16 @@ jobs:
       - name: Build static binaries
         run: |
           mkdir -p dist
+          # Stamp a real version so plugins that require a minimum corral (and
+          # `corral version`) see something meaningful instead of the v0.0.0
+          # pseudo-version a bare `go build` produces. git-describe's
+          # "v0.4.0-5-g<sha>" becomes semver build metadata "v0.4.0+5.g<sha>",
+          # which compares equal to v0.4.0 for constraint checks.
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null | sed -E 's/-([0-9]+)-g/+\1.g/')"
+          echo "Stamping version: ${VERSION:-<empty>}"
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -ldflags="-s -w" -o "dist/corral-linux-$arch" .
+              go build -ldflags="-s -w -X github.com/tuna-os/corral/cmd.version=${VERSION}" -o "dist/corral-linux-$arch" .
           done
           (cd dist && sha256sum * > SHA256SUMS)
           ls -lh dist/
