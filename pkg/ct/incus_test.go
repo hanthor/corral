@@ -67,6 +67,41 @@ func TestListIncusCTs_NoDaemonIsEmptyNotAPanic(t *testing.T) {
 	}
 }
 
+// An Incus host with no Kubernetes cluster is a supported deployment. Now that
+// a container is a CT and not a VM, ListCTs is the only place it appears, so a
+// kubectl failure must not take the Incus containers down with it.
+func TestListCTs_IncusSurvivesNoCluster(t *testing.T) {
+	fakeIncus(t, incusRemoteJSON)
+
+	kube := shell.NewFake() // no kubectl responses registered: no cluster
+	SetRunner(kube)
+	t.Cleanup(func() { SetRunner(shell.DefaultKubectl) })
+
+	cts, err := ListCTs()
+	if err != nil {
+		t.Fatalf("ListCTs with Incus but no cluster: %v", err)
+	}
+	if len(cts) != 1 || cts[0].Name != "web-ct" {
+		t.Fatalf("ListCTs = %+v, want the Incus container", cts)
+	}
+}
+
+// With neither a cluster nor Incus, the cluster error is the useful answer —
+// an empty list would claim the host has no CTs when it cannot tell.
+func TestListCTs_NoClusterNoIncusReportsTheClusterError(t *testing.T) {
+	f := shell.NewFake()
+	incus.SetRunner(f)
+	t.Cleanup(func() { incus.SetRunner(shell.Real{}) })
+
+	kube := shell.NewFake()
+	SetRunner(kube)
+	t.Cleanup(func() { SetRunner(shell.DefaultKubectl) })
+
+	if _, err := ListCTs(); err == nil {
+		t.Error("ListCTs with no cluster and no Incus returned no error")
+	}
+}
+
 // The lifecycle helpers must go through the seam, or a CT on a remote can be
 // listed and never started.
 func TestIncusCTLifecycleUsesTheSeam(t *testing.T) {

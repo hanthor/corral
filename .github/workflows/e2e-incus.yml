@@ -45,7 +45,11 @@ jobs:
       - name: Run Incus LXC Container E2E Tests
         run: |
           ./corral incus create test-ct --image images:ubuntu/22.04
-          ./corral list | grep test-ct
+          # An LXC container is a CT, so it belongs in `ct list` — and it must
+          # be absent from the VM fleet, which is where it used to appear as a
+          # second copy of itself.
+          ./corral ct list | grep test-ct
+          ! ./corral list | grep -q test-ct
           ./corral incus start test-ct
           ./corral incus info test-ct
           ./corral incus stop test-ct
@@ -61,12 +65,22 @@ jobs:
 
       - name: Test Web UI Integration & Demo Seam
         run: |
-          # Verify Web UI serves Incus aggregated endpoints in demo mode
+          # Verify Web UI serves Incus aggregated endpoints in demo mode. The
+          # demo remote holds one container and one virtual machine, and each
+          # belongs to exactly one endpoint: the VM in /api/vms, the container
+          # in /api/cts. Asserting both is what catches an instance being
+          # listed twice.
           ./corral web --demo --addr 127.0.0.1:8006 &
           WEB_PID=$!
-          sleep 2
-          curl -fsS http://127.0.0.1:8006/api/vms | grep incus-demo-container
-          kill $WEB_PID
+          trap 'kill $WEB_PID' EXIT
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8006/api/vms -o /tmp/demo-vms.json && break
+            sleep 1
+          done
+          jq -e 'any(.[]; .name == "incus-demo-vm" and .backend == "incus")' /tmp/demo-vms.json
+          jq -e 'all(.[]; .name != "incus-demo-container")' /tmp/demo-vms.json
+          curl -fsS http://127.0.0.1:8006/api/cts \
+            | jq -e 'any(.[]; .name == "incus-demo-container" and .backend == "incus")'
 
       - name: Real triple-backend aggregate inventory (QEMU + Incus + libvirt)
         run: |

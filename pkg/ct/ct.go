@@ -564,10 +564,20 @@ func Exists(name, namespace string) bool {
 // the pod is currently running, same as a stopped VM still being a VM.
 // Live phase/readiness come from the pod when one exists; "Stopped"
 // otherwise.
+// A host with Incus and no Kubernetes is a supported deployment, so a kubectl
+// failure hides the KubeVirt CTs and nothing else: the Incus containers are
+// still listed. Before Incus containers were CTs they showed up (wrongly) in
+// the VM fleet, so returning early here would have made them unreachable from
+// any command on such a host.
 func ListCTs() ([]CT, error) {
-	pvcOut, err := run("kubectl", "get", "pvc", "-A", "-l", labelCT+"=true", "-o", "json")
-	if err != nil {
-		return nil, err
+	pvcOut, kubeErr := run("kubectl", "get", "pvc", "-A", "-l", labelCT+"=true", "-o", "json")
+	if kubeErr != nil {
+		incusCTs := listIncusCTs()
+		if len(incusCTs) == 0 {
+			// Nothing anywhere: the cluster error is the useful answer.
+			return nil, kubeErr
+		}
+		return incusCTs, nil
 	}
 	var pvcRes struct {
 		Items []struct {
