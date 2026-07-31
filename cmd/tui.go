@@ -232,9 +232,13 @@ type tuiModel struct {
 	notice      string
 	noticeKind  string // "", "ok", "warn", "error" — drives the notice colour
 	showHelp    bool
-	spin        spinner.Model
-	busy        bool // an action is running; the header shows the spinner
-	busyLabel   string
+	// lastClickRow / lastClickAt turn two clicks on the same row into a double
+	// click — see cmd/tui_mouse.go.
+	lastClickRow int
+	lastClickAt  time.Time
+	spin         spinner.Model
+	busy         bool // an action is running; the header shows the spinner
+	busyLabel    string
 	// th is rebuilt when the terminal answers the background-colour query.
 	// lipgloss v2 removed AdaptiveColor, so a style cannot resolve until the
 	// background is known — see cmd/tui_theme.go.
@@ -362,6 +366,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.actionsList.SetSize(msg.Width, msg.Height-2)
 		return m, nil
 
+	case tea.MouseClickMsg, tea.MouseWheelMsg:
+		// A click or a wheel tick, mapped to a row by cmd/tui_mouse.go. An
+		// event that lands on nothing leaves the model untouched.
+		m.handleMouse(msg)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		if m.showHelp {
 			m.showHelp = false
@@ -466,61 +476,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitting = true
 				return m, tea.Quit
 			case "enter":
-				if item, ok := m.actionsList.SelectedItem().(actionItem); ok {
-					switch item.id {
-					case "ports":
-						m.state = "edit"
-						m.edit = newEditModel(m.selected)
-						return m, m.edit.Init()
-					case "hardware":
-						m.state = "hwedit"
-						if m.isCT {
-							m.hwEdit = newCTHWEditModel(m.selectedCT)
-						} else {
-							m.hwEdit = newHWEditModel(m.selected)
-						}
-						return m, m.hwEdit.Init()
-					case "clone":
-						m.state = "cloneInput"
-						m.cloneErr = ""
-						m.cloneInput = newCloneInput(m.selected.Name)
-						return m, m.cloneInput.Focus()
-					case "snapshot":
-						// Parity with the web UI's Snapshots tab: the action
-						// opens the captures the VM already has rather than
-						// silently taking one more.
-						m.snapshots = newSnapshotsState(m.selected)
-						m.state = "snapshots"
-						return m, nil
-					case "events":
-						m.events = newEventsState(m.selected)
-						m.state = "events"
-						return m, nil
-					case "template":
-						m.toggleTemplate()
-						m.refreshList()
-						m.state = "list"
-						return m, nil
-					case "start", "stop", "restart", "pause", "unpause", "migrate":
-						m.performAction(item.id)
-						m.refreshList()
-						m.state = "list"
-						return m, nil
-					case "ssh", "viewer", "export":
-						actionID := item.id
-						postQuitAction = func() { m.performAction(actionID) }
-						m.quitting = true
-						return m, tea.Quit
-					case "console":
-						name, ns := m.selectedCT.Name, m.selectedCT.Namespace
-						postQuitAction = func() { ct.Console(name, ns) }
-						m.quitting = true
-						return m, tea.Quit
-					case "delete":
-						m.state = "confirmDelete"
-						return m, nil
-					}
-				}
+				return m, m.runSelectedAction()
 			}
 			var cmd tea.Cmd
 			m.actionsList, cmd = m.actionsList.Update(msg)
@@ -578,18 +534,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			switch item := m.list.SelectedItem().(type) {
-			case vmItem:
-				m.selected = item.vm
-				m.isCT = false
-				m.actionsList = m.newActionsList()
-				m.state = "actions"
-				return m, nil
-			case ctItem:
-				m.selectedCT = item.ct
-				m.isCT = true
-				m.actionsList = m.newActionsList()
-				m.state = "actions"
+			// Anything that is not an instance row (an empty list, or the
+			// filter prompt) falls through to the list itself.
+			if m.openActionsForSelection() {
 				return m, nil
 			}
 		}
@@ -601,6 +548,65 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// runSelectedAction runs whatever the actions menu has highlighted. Enter and a
+// double click both come through here, so a mouse can never reach an action a
+// keyboard cannot — including the destructive ones, which still land on their
+// confirmation rather than firing.
+func (m *tuiModel) runSelectedAction() tea.Cmd {
+	item, ok := m.actionsList.SelectedItem().(actionItem)
+	if !ok {
+		return nil
+	}
+	switch item.id {
+	case "ports":
+		m.state = "edit"
+		m.edit = newEditModel(m.selected)
+		return m.edit.Init()
+	case "hardware":
+		m.state = "hwedit"
+		if m.isCT {
+			m.hwEdit = newCTHWEditModel(m.selectedCT)
+		} else {
+			m.hwEdit = newHWEditModel(m.selected)
+		}
+		return m.hwEdit.Init()
+	case "clone":
+		m.state = "cloneInput"
+		m.cloneErr = ""
+		m.cloneInput = newCloneInput(m.selected.Name)
+		return m.cloneInput.Focus()
+	case "snapshot":
+		// Parity with the web UI's Snapshots tab: the action opens the captures
+		// the VM already has rather than silently taking one more.
+		m.snapshots = newSnapshotsState(m.selected)
+		m.state = "snapshots"
+	case "events":
+		m.events = newEventsState(m.selected)
+		m.state = "events"
+	case "template":
+		m.toggleTemplate()
+		m.refreshList()
+		m.state = "list"
+	case "start", "stop", "restart", "pause", "unpause", "migrate":
+		m.performAction(item.id)
+		m.refreshList()
+		m.state = "list"
+	case "ssh", "viewer", "export":
+		actionID := item.id
+		postQuitAction = func() { m.performAction(actionID) }
+		m.quitting = true
+		return tea.Quit
+	case "console":
+		name, ns := m.selectedCT.Name, m.selectedCT.Namespace
+		postQuitAction = func() { ct.Console(name, ns) }
+		m.quitting = true
+		return tea.Quit
+	case "delete":
+		m.state = "confirmDelete"
+	}
+	return nil
 }
 
 func (m *tuiModel) performAction(action string) {
@@ -1055,7 +1061,8 @@ func tuiHelpView() string {
 		"  s / x        quick start / graceful stop\n" +
 		"  r            refresh every backend\n" +
 		"  d            doctor: backend diagnostics\n" +
-		"  q            quit\n\n" + tuiHelp.Render("  press any key to return")
+		"  q            quit\n" +
+		"  mouse        click to select, double-click to open, wheel to scroll\n\n" + tuiHelp.Render("  press any key to return")
 }
 
 func tuiDetailView(item list.Item, width int, errs map[string]string, th theme) string {
@@ -1187,18 +1194,7 @@ func (m editModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Bubble Tea v2 names the space key "space"; the old " " never
 		// matches, which left the documented space-to-toggle binding dead.
 		case " ", "space", "enter":
-			if m.cursor < len(m.ports) {
-				p := m.ports[m.cursor]
-				m.toggled[p] = !m.toggled[p]
-				m.applyPorts()
-			} else if m.cursor == len(m.ports) {
-				m.adding = true
-				m.addInput.Focus()
-				return m, textinput.Blink
-			} else if m.cursor == len(m.ports)+1 {
-				m.toggled = make(map[int]bool)
-				m.applyPorts()
-			}
+			return m, m.activateCursor()
 		case "backspace":
 			if m.cursor < len(m.ports) {
 				p := m.ports[m.cursor]
@@ -1239,6 +1235,26 @@ func (m editModel) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.addInput, cmd = m.addInput.Update(msg)
 	return m, cmd
+}
+
+// activateCursor is what space, enter, and a click on a row all do: toggle the
+// port under the cursor, or open the add prompt, or clear every port. One
+// function, so a mouse click cannot drift from what the keyboard does.
+func (m *editModel) activateCursor() tea.Cmd {
+	switch {
+	case m.cursor < len(m.ports):
+		p := m.ports[m.cursor]
+		m.toggled[p] = !m.toggled[p]
+		m.applyPorts()
+	case m.cursor == len(m.ports):
+		m.adding = true
+		m.addInput.Focus()
+		return textinput.Blink
+	case m.cursor == len(m.ports)+1:
+		m.toggled = make(map[int]bool)
+		m.applyPorts()
+	}
+	return nil
 }
 
 func (m *editModel) applyPorts() {
@@ -1499,6 +1515,9 @@ func (d vmItemDelegate) Render(w io.Writer, m list.Model, index int, li list.Ite
 func (m tuiModel) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Cell-motion tracking: enough for clicks and the wheel, without asking the
+	// terminal to report every idle movement.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
