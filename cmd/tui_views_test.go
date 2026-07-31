@@ -863,3 +863,89 @@ func TestTUIConsistencyLabel(t *testing.T) {
 		}
 	}
 }
+
+// ── the operation contract ────────────────────────────────────────
+
+// The behaviour the contract bought: a backend that cannot do something says so.
+// The if/else ladder this replaced did nothing at all for pause off KubeVirt —
+// the operator pressed a key and the fleet did not change.
+func TestTUIBackendAction_RefusesWithTheBackendNamed(t *testing.T) {
+	demo.Enable()
+
+	m := testModel(types.VM{
+		Name: "incus-demo-vm", Backend: "incus", Context: "local",
+		Status: "Running", Running: true,
+	})
+	m.performBackendAction("pause")
+	if m.noticeKind != "error" {
+		t.Fatalf("notice kind = %q, want an error", m.noticeKind)
+	}
+	for _, want := range []string{"incus", "pause", "backend-parity"} {
+		if !strings.Contains(m.notice, want) {
+			t.Errorf("refusal %q does not mention %q", m.notice, want)
+		}
+	}
+}
+
+func TestTUIBackendAction_UnknownBackendIsReported(t *testing.T) {
+	demo.Enable()
+
+	m := testModel(types.VM{Name: "mystery", Backend: "vmware", Status: "Running", Running: true})
+	m.performBackendAction("start")
+	if m.noticeKind != "error" || !strings.Contains(m.notice, "vmware") {
+		t.Errorf("notice = %q (%s), want an error naming the backend", m.notice, m.noticeKind)
+	}
+}
+
+// A power action that works reports what happened, rather than leaving the
+// operator to infer it from the list refreshing.
+func TestTUIBackendAction_ReportsSuccess(t *testing.T) {
+	demo.Enable()
+
+	m := testModel(types.VM{
+		Name: "dev-fedora", Backend: "kubevirt", Namespace: "corral-vms",
+		Status: "Stopped",
+	})
+	m.performBackendAction("start")
+	if m.noticeKind != "ok" {
+		t.Fatalf("notice = %q (%s), want a success", m.notice, m.noticeKind)
+	}
+	if !strings.Contains(m.notice, "dev-fedora") || !strings.Contains(m.notice, "started") {
+		t.Errorf("notice = %q, want it to name the VM and what happened", m.notice)
+	}
+}
+
+// Migration asks the backend's own pre-flight first. The refusal carries the
+// backend's reason, which is the whole point of CanMigrate returning one.
+func TestTUIBackendAction_MigrateRelaysThePreflight(t *testing.T) {
+	demo.Enable()
+
+	m := testModel(types.VM{
+		Name: "dev-fedora", Backend: "kubevirt", Namespace: "corral-vms",
+		Status: "Stopped", LiveMigratable: false,
+	})
+	m.performBackendAction("migrate")
+	if m.noticeKind != "error" {
+		t.Fatalf("notice = %q (%s), want the pre-flight refusal", m.notice, m.noticeKind)
+	}
+	if !strings.Contains(m.notice, "cannot migrate") {
+		t.Errorf("notice = %q, want it to say the migration was refused", m.notice)
+	}
+	// And the reason, not just the verdict.
+	if !strings.Contains(m.notice, "migratable") {
+		t.Errorf("notice = %q, want the backend's own reason", m.notice)
+	}
+}
+
+func TestPastTense(t *testing.T) {
+	cases := map[string]string{
+		"start": "started", "stop": "stopped", "restart": "restarted",
+		"delete": "deleted", "pause": "paused", "unpause": "resumed",
+		"migrate": "migrating",
+	}
+	for action, want := range cases {
+		if got := pastTense(action); got != want {
+			t.Errorf("pastTense(%q) = %q, want %q", action, got, want)
+		}
+	}
+}

@@ -622,52 +622,21 @@ func (m *tuiModel) performAction(action string) {
 		ns = "default"
 	}
 
+	// Power, pause, and migrate go through the operation contract
+	// (pkg/backend): one adapter per backend, asserted for the family the
+	// action needs. This replaced a per-backend if/else ladder per action —
+	// the shape that made every backend but KubeVirt best-effort, because
+	// adding an action meant remembering to add four more branches.
+	//
+	// The refusals matter as much as the calls: an action a backend cannot
+	// perform now reports why, where the ladder silently did nothing.
 	switch action {
-	case "start":
-		if backend == "incus" {
-			incus.NewClient(contextName).Start(name)
-		} else if backend == "libvirt" {
-			libvirt.NewClient(contextName).Start(name)
-		} else if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).StartVM(name)
-		} else {
-			qemu.Start(name)
+	case "start", "stop", "restart", "delete", "pause", "unpause", "migrate":
+		m.performBackendAction(action)
+		if action == "delete" && registryStore != nil {
+			registryStore.RemoveRef(m.selected.Ref())
 		}
-	case "stop":
-		if backend == "incus" {
-			incus.NewClient(contextName).Stop(name)
-		} else if backend == "libvirt" {
-			libvirt.NewClient(contextName).Stop(name)
-		} else if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).StopVM(name)
-		} else {
-			qemu.Stop(name)
-		}
-	case "restart":
-		if backend == "incus" {
-			incus.NewClient(contextName).Stop(name)
-			incus.NewClient(contextName).Start(name)
-		} else if backend == "libvirt" {
-			libvirt.NewClient(contextName).Stop(name)
-			libvirt.NewClient(contextName).Start(name)
-		} else if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).RestartVM(name)
-		} else {
-			qemu.Stop(name)
-			qemu.Start(name)
-		}
-	case "pause":
-		if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).PauseVM(name)
-		}
-	case "unpause":
-		if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).UnpauseVM(name)
-		}
-	case "migrate":
-		if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).Migrate(name, "")
-		}
+		return
 	case "export":
 		if backend == "kubevirt" {
 			out, err := kubevirt.NewClientForContext(ns, contextName).Export(name, "", "")
@@ -676,19 +645,6 @@ func (m *tuiModel) performAction(action string) {
 			} else {
 				fmt.Println("Exported to", out)
 			}
-		}
-	case "delete":
-		if backend == "incus" {
-			incus.NewClient(contextName).Delete(name)
-		} else if backend == "libvirt" {
-			libvirt.NewClient(contextName).Delete(name)
-		} else if backend == "kubevirt" {
-			kubevirt.NewClientForContext(ns, contextName).DeleteVM(name)
-		} else {
-			qemu.Delete(name)
-		}
-		if registryStore != nil {
-			registryStore.RemoveRef(m.selected.Ref())
 		}
 	case "viewer":
 		if backend == "kubevirt" {

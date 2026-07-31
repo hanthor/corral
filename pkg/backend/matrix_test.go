@@ -241,15 +241,6 @@ func marker(s Support) string {
 	}
 }
 
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
-
 func init() {
 	// Fail loudly if a backend is added to types without the matrix learning
 	// about it: CapabilitiesForBackend returning anything non-zero for a
@@ -259,5 +250,106 @@ func init() {
 		if !contains(Backends, backend) {
 			panic(fmt.Sprintf("backend %q is missing from Backends", backend))
 		}
+	}
+}
+
+// ── the operation contract ────────────────────────────────────────
+
+// The point of the contract: what a backend supports is what its adapter
+// implements, and the matrix has to agree. This is the test that makes adding a
+// method to an adapter *the* way to close a gap — forget the matrix and CI says
+// so; claim it in the matrix without implementing and CI says that too.
+func TestAdaptersAgreeWithTheMatrix(t *testing.T) {
+	for _, family := range Families {
+		for _, operation := range family.Operations {
+			for _, backend := range Backends {
+				entry, ok := Get(operation, backend)
+				if !ok {
+					t.Fatalf("family %s claims operation %q, which the matrix has no row for",
+						family.Name, operation)
+				}
+				provides := Provides(backend, operation)
+
+				switch entry.Support {
+				case Shipped:
+					if !provides {
+						t.Errorf("%s/%s: the matrix says shipped but %s's adapter does not implement %s — "+
+							"either wire it through the contract or downgrade the cell",
+							operation, backend, backend, family.Name)
+					}
+				case Possible, Unsupported:
+					if provides {
+						t.Errorf("%s/%s: %s's adapter implements %s, so this is shipped — "+
+							"update the matrix (and the capability flag) rather than hiding it",
+							operation, backend, backend, family.Name)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Every backend must have an adapter, and every adapter must be constructible
+// from a bare reference — capability derivation probes the type, so a
+// constructor that needs a live cluster would make the whole mechanism
+// unavailable offline.
+func TestEveryBackendHasAProbeableAdapter(t *testing.T) {
+	for _, backend := range Backends {
+		if !Registered(backend) {
+			t.Errorf("backend %q has no adapter registered", backend)
+			continue
+		}
+		adapter, err := For(types.InstanceRef{Backend: backend, Name: "probe"})
+		if err != nil {
+			t.Errorf("For(%q) = %v; the constructor must not need a live connection", backend, err)
+			continue
+		}
+		if adapter.Backend() != backend {
+			t.Errorf("adapter for %q reports backend %q", backend, adapter.Backend())
+		}
+		// Power is the floor: a backend that cannot start, stop, and delete is
+		// not a backend Corral can drive.
+		if _, ok := adapter.(Power); !ok {
+			t.Errorf("%s's adapter does not implement Power", backend)
+		}
+	}
+}
+
+func TestForRejectsWhatItCannotServe(t *testing.T) {
+	if _, err := For(types.InstanceRef{Name: "x"}); err == nil {
+		t.Error("a reference with no backend should be refused")
+	}
+	_, err := For(types.InstanceRef{Backend: "vmware", Name: "x"})
+	if err == nil {
+		t.Fatal("an unknown backend should be refused")
+	}
+	// The refusal has to say what *is* available, or the operator is left
+	// guessing at spelling.
+	for _, want := range []string{"vmware", "kubevirt", "backend-parity"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not mention %q", err, want)
+		}
+	}
+}
+
+// Implemented is the per-backend summary the docs and the doctor can print. It
+// is also the clearest statement of the parity problem: one backend implements
+// everything and the others implement a fraction.
+func TestImplementedSummarisesEachBackend(t *testing.T) {
+	kubevirt := Implemented("kubevirt")
+	if len(kubevirt) != len(Families) {
+		t.Errorf("kubevirt implements %d of %d families (%v) — the reference backend should be complete",
+			len(kubevirt), len(Families), kubevirt)
+	}
+	for _, backend := range []string{"qemu", "incus", "libvirt"} {
+		if got := Implemented(backend); len(got) >= len(Families) {
+			t.Errorf("%s implements %v, which the matrix does not claim", backend, got)
+		}
+	}
+	if got := Implemented("proxmox"); len(got) < 8 {
+		t.Errorf("proxmox implements only %v; it was built against the contract", got)
+	}
+	if got := Implemented("vmware"); got != nil {
+		t.Errorf("Implemented on an unknown backend = %v, want nil", got)
 	}
 }
