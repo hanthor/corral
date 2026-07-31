@@ -50,6 +50,20 @@ Another `corral web` API aggregated into the local dashboard. Direct guest
 connectivity is preferred; peer relay is the fallback. A peer keeps its
 identity on every VM so duplicate names remain distinct.
 
+### Folder
+
+*Proposed, not yet implemented — see `docs/adr/0008-folders.md`.*
+
+An operator-defined group of instances, nestable as a path
+(`prod/web-stack`), holding members by canonical `InstanceRef` so one folder
+can span backends, contexts, and peers. Each instance belongs to at most
+one folder — folders are a tree whose scope a bulk action (and later a
+backup or downtime policy) can be defined against, which is what separates
+them from tags: tags stay flat, multi-valued, and KubeVirt-only.
+Membership lives in Corral's own state (config locally, a ConfigMap
+in-cluster, as image sources do), not in backend labels, because a local
+qemu VM has nowhere to carry a label.
+
 ### Console
 
 Remote access to a VM's display: **VNC** (noVNC, port 5900) and **RDP**
