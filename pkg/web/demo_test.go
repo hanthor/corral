@@ -79,11 +79,15 @@ func TestDemoMode_EndToEnd(t *testing.T) {
 		t.Errorf("win11-desktop should be paused: %+v", byName["win11-desktop"])
 	}
 
-	// CTs and nodes populate.
+	// CTs and nodes populate. Three CTs: two pet pods plus the demo remote's
+	// Incus container, which only started appearing once pkg/ct's Incus path
+	// went through the runner seam instead of exec.Command — before that it was
+	// invisible in demo mode, and the Incus *virtual machine* on the same
+	// remote was wrongly counted here as a CT.
 	var cts []map[string]any
 	getJSON(t, srv, "/api/cts", &cts)
-	if len(cts) != 2 {
-		t.Errorf("demo has %d CTs, want 2", len(cts))
+	if len(cts) != 3 {
+		t.Errorf("demo has %d CTs, want 3", len(cts))
 	}
 	// Local backend fixture (#91 Phase 4): a fake qemu VM under a "local" node.
 	if v := byName["laptop-dev"]; v == nil || v["backend"] != "qemu" || v["namespace"] != "local" {

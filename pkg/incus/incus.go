@@ -22,6 +22,52 @@ type Instance struct {
 	StatusCode int               `json:"status_code"`
 	Location   string            `json:"location"`
 	Config     map[string]string `json:"config"`
+	State      *InstanceState    `json:"state,omitempty"`
+}
+
+// InstanceState is the live state `incus list` returns alongside the config.
+// Only the addresses are read: without them every Incus instance showed a blank
+// address column, and the SSH and RDP probes had nothing to aim at.
+type InstanceState struct {
+	Network map[string]struct {
+		Addresses []struct {
+			Family  string `json:"family"`
+			Address string `json:"address"`
+			Scope   string `json:"scope"`
+		} `json:"addresses"`
+	} `json:"network"`
+}
+
+// IsContainer reports whether this instance is an LXC container rather than an
+// Incus virtual machine. Incus hosts both, and Corral models them as different
+// things — a container is a CT, a virtual machine is a VM — so the distinction
+// has to survive the listing. It used to be parsed and then dropped, which is
+// how every Incus instance ended up listed twice: once as a VM by this package
+// and once as a CT by pkg/ct.
+func (i Instance) IsContainer() bool {
+	// Incus reports "container" or "virtual-machine"; an older daemon or a
+	// partial response may omit the field, and a container is the safer
+	// assumption for an instance Corral cannot classify (it loses a graphical
+	// console rather than inventing one).
+	return i.Type != "virtual-machine"
+}
+
+// Address returns the instance's first global IPv4, or "" when it has none yet.
+func (i Instance) Address() string {
+	if i.State == nil {
+		return ""
+	}
+	for iface, net := range i.State.Network {
+		if iface == "lo" {
+			continue
+		}
+		for _, addr := range net.Addresses {
+			if addr.Family == "inet" && addr.Scope != "link" && addr.Scope != "local" {
+				return addr.Address
+			}
+		}
+	}
+	return ""
 }
 
 var defaultRunner shell.Runner = shell.Real{}
@@ -61,7 +107,28 @@ func (c Client) ListInstances() ([]Instance, error) {
 	return insts, nil
 }
 
-// List converts Incus instances into Corral types.VM slice.
+// Containers returns the remote's LXC containers. pkg/ct maps these onto
+// Corral CTs; they are deliberately absent from List, so one instance is never
+// both a VM and a CT.
+func Containers() ([]Instance, error) { return NewClient("").Containers() }
+
+func (c Client) Containers() ([]Instance, error) {
+	insts, err := c.ListInstances()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Instance, 0, len(insts))
+	for _, inst := range insts {
+		if inst.IsContainer() {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
+// List converts the remote's Incus *virtual machines* into Corral VMs.
+// Containers are not VMs and are returned by Containers instead — see
+// Instance.IsContainer for why this split matters.
 func List() ([]types.VM, error) {
 	return NewClient("").List()
 }
@@ -73,6 +140,9 @@ func (c Client) List() ([]types.VM, error) {
 	}
 	var vms []types.VM
 	for _, inst := range insts {
+		if inst.IsContainer() {
+			continue
+		}
 		running := strings.EqualFold(inst.Status, "Running")
 		cpu := 0
 		if c, ok := inst.Config["limits.cpu"]; ok {
@@ -91,6 +161,7 @@ func (c Client) List() ([]types.VM, error) {
 			CPU:       cpu,
 			Mem:       mem,
 			Node:      inst.Location,
+			IP:        inst.Address(),
 		}
 		vm.SetIdentity()
 		vms = append(vms, vm)

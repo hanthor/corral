@@ -268,7 +268,7 @@ var Matrix = map[string]map[string]Entry{
 	"containers": {
 		"kubevirt": {Shipped, "pet-pod CTs, ADR-0005, pkg/ct"},
 		"qemu":     {Unsupported, "a hypervisor, not a container runtime"},
-		"incus":    {Shipped, "LXC containers listed and controlled as CTs, pkg/ct's incus path — see the audit notes in docs/backend-parity.md"},
+		"incus":    {Shipped, "LXC containers listed and controlled as CTs through pkg/incus.Containers; Incus virtual machines are VMs, not CTs"},
 		"libvirt":  {Unsupported, "libvirt's LXC driver is not something Corral drives"},
 		"proxmox":  {Possible, "/nodes/{node}/lxc — PVE containers map onto Corral CTs, ADR-0009"},
 	},

@@ -55,24 +55,28 @@ backend cannot, or it is meaningless there.
 
 ## What the audit found
 
-Four things that are worse than a missing feature, because each one is a claim
-Corral makes that isn't true:
+Four things that were worse than a missing feature, because each was a claim
+Corral made that wasn't true. **The first three are fixed** (same change as this
+document); the fourth is the structural one and is step 2 of the work below.
 
-1. **Every Incus instance is listed twice.** `pkg/incus.List` returns *all*
+1. ~~**Every Incus instance is listed twice.**~~ *Fixed.* `pkg/incus.List` returns *all*
    instances as VMs — it reads `Type` from the JSON and then ignores it — while
    `pkg/ct.listIncusCTs` returns the same instances again as CTs. An Incus
    container therefore appears as both a VM and a CT in the fleet, and an Incus
    *virtual machine* appears as a CT. This is the single clearest symptom of
    LXC support never having been finished.
 
-2. **`pkg/ct`'s Incus path bypasses the runner seam.** `listIncusCTs`,
+2. ~~**`pkg/ct`'s Incus path bypasses the runner seam.**~~ *Fixed —* it now goes
+   through `pkg/incus`, which targets the configured remote, and demo mode shows
+   Incus CTs for the first time. `listIncusCTs`,
    `incusExists`, `incusStart`, `incusStop`, and `incusDelete` call
    `exec.Command` directly instead of going through `shell.Runner`. Consequences:
    they are untestable, they are invisible to demo mode, and they always talk to
    the *local* daemon — the configured remote is ignored, so a CT on a remote
    Incus host cannot be started even though the VM path on the same host can.
 
-3. **Incus instances have no address.** `List` never reads `state.network`, so
+3. ~~**Incus instances have no address.**~~ *Fixed —* `state.network` is read,
+   skipping loopback and link-local. `List` never reads `state.network`, so
    the IP column is empty for every Incus instance and the RDP/SSH probes have
    nothing to aim at.
 
@@ -91,9 +95,11 @@ visible.
 
 ## The work, in the order it should happen
 
-**1. Stop the lies.** Fix the Incus double-listing (route containers to CT, VMs
-to VM, by `Type`), move `pkg/ct`'s Incus path onto `shell.Runner` with remote
-targeting, and read the instance address. These are bugs, not features.
+**1. Stop the lies.** *Done:* Incus containers are CTs and Incus virtual
+machines are VMs (`incus.Instance.IsContainer`), the CT path targets the
+configured remote through `pkg/incus`, and the instance address is read. The
+demo fixture now holds both an Incus container and an Incus VM, so the split
+stays covered.
 
 **2. Generalise the adapter contract.** Grow `types.Backend` — or better, a set
 of small optional interfaces alongside it, one per operation family (`Power`,
