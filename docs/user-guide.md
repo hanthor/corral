@@ -142,6 +142,10 @@ hiding healthy instances.
 - `s` and `x` quickly start or stop the selected VM; `r` refreshes every
   backend.
 - `d` runs scoped QEMU, KubeVirt, Incus, and libvirt diagnostics.
+- The mouse works too: click a row to select it, double-click to open its
+  actions (or to run the highlighted one), and scroll with the wheel. Clicking
+  a port row in the ports form toggles it. Destructive actions still go through
+  their confirmation — a double click can't reach anything a keypress can't.
 - `?` opens the in-app command deck.
 - QEMU, KubeVirt, Incus, libvirt, and pet-pod CTs share the inventory without
   losing their backend-specific capabilities.
