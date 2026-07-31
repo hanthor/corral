@@ -89,38 +89,66 @@ let lastRenderFp = '';
 // failed 5s poll, so it doesn't clobber pages that work offline (Extensions).
 let offlineShown = false;
 
-// First-load failure page: no cluster reachable. The dashboard drives the
-// KubeVirt backend, so tell the user how to connect one instead of showing
-// a blank screen.
-function renderOffline(msg) {
-  $('#content').innerHTML = `
-    <div class="empty-state">
-      <div class="empty-icon">🤠</div>
-      <h1>No cluster connected</h1>
-      <p class="muted">Corral couldn't reach a Kubernetes cluster:
-        <code>${esc(msg)}</code></p>
-      <p>This dashboard drives the KubeVirt backend. To get going:</p>
-      <ul>
-        <li>Point <code>kubectl</code> at a cluster (<code>KUBECONFIG</code> or
-          <code>~/.kube/config</code>), then hit Retry.</li>
-        <li>Run <code>corral doctor --fix</code> to install anything the
-          cluster is missing (KubeVirt, CDI, …).</li>
-        <li>No cluster handy? Local QEMU VMs work from the CLI:
-          <code>corral create myvm --image fedora</code></li>
-      </ul>
-      <button class="btn primary" id="offline-retry">Retry</button>
-    </div>`;
+// First-load failure page: couldn't list any VMs. Tailor the guidance to the
+// configured backends — only nag about connecting a KubeVirt cluster when
+// kubevirt is actually a configured target. A host that only runs local
+// QEMU/Incus/libvirt VMs should never be told to go install KubeVirt.
+async function renderOffline(msg) {
+  const content = $('#content');
+  if (!content) return;
+  let backends = [];
+  try {
+    const r = await api('/api/contexts');
+    backends = (r.contexts || []).map((c) => c.backend);
+  } catch { /* fall through to the cluster-oriented default */ }
+  // Unknown backends (contexts fetch failed) defaults to the cluster message,
+  // which also carries the local-CLI fallback hint.
+  const hasKubevirt = backends.length === 0 || backends.includes('kubevirt');
+
+  if (hasKubevirt) {
+    content.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🤠</div>
+        <h1>No cluster connected</h1>
+        <p class="muted">Corral couldn't reach a Kubernetes cluster:
+          <code>${esc(msg)}</code></p>
+        <p>This dashboard drives the KubeVirt backend. To get going:</p>
+        <ul>
+          <li>Point <code>kubectl</code> at a cluster (<code>KUBECONFIG</code> or
+            <code>~/.kube/config</code>), then hit Retry.</li>
+          <li>Run <code>corral doctor --fix</code> to install anything the
+            cluster is missing (KubeVirt, CDI, …).</li>
+          <li>No cluster handy? Local QEMU VMs work from the CLI:
+            <code>corral create myvm --image fedora</code></li>
+        </ul>
+        <button class="btn primary" id="offline-retry">Retry</button>
+      </div>`;
+  } else {
+    const names = [...new Set(backends.filter((b) => b !== 'kubevirt'))].join(', ') || 'local';
+    content.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🤠</div>
+        <h1>No VMs yet</h1>
+        <p class="muted">Couldn't list VMs from the ${esc(names)} backend:
+          <code>${esc(msg)}</code></p>
+        <p>Create your first VM from the CLI, then hit Retry:</p>
+        <ul>
+          <li><code>corral create myvm --image fedora</code></li>
+        </ul>
+        <button class="btn primary" id="offline-retry">Retry</button>
+      </div>`;
+  }
   const b = $('#offline-retry');
   if (b) b.onclick = () => { offlineShown = false; refresh(true); };
 }
 
 async function refresh(force = false) {
   try {
-    [vms, nodes] = await Promise.all([api('/api/vms'), api('/api/nodes')]);
+    vms = await api('/api/vms');
   } catch (e) {
-    // Never rendered anything yet → the cluster is unreachable on first load.
-    // A blank page with a toast reads as "broken"; show setup guidance once
-    // instead, and keep the static tree rows (Extensions works offline).
+    // Couldn't list VMs from any configured backend → genuinely nothing to
+    // show. A blank page with a toast reads as "broken"; show setup guidance
+    // once instead, and keep the static tree rows (Extensions works offline).
     if (!lastRenderFp && !offlineShown) {
       offlineShown = true;
       renderTree();
@@ -130,6 +158,9 @@ async function refresh(force = false) {
     }
     return;
   }
+  // Nodes are the cluster topology view; a local-only deployment (QEMU/Incus/
+  // libvirt) has none, and a nodes failure must never blank a working VM list.
+  try { nodes = await api('/api/nodes'); } catch { nodes = []; }
   offlineShown = false;
   try { cts = await api('/api/cts'); } catch { cts = []; } // best-effort — don't fail the whole refresh over CTs
   const fp = JSON.stringify([vms, cts, nodes, selected, tab]);

@@ -97,6 +97,20 @@ func FindContext(name string) (ContextConfig, bool) {
 	return ContextConfig{}, false
 }
 
+// HasBackend reports whether any configured context uses the given backend.
+// Callers use this to decide whether a backend's features are worth surfacing
+// at all — e.g. the web dashboard only nags about connecting a KubeVirt
+// cluster when kubevirt is actually a configured target, not for a host that
+// only ever runs local QEMU/Incus/libvirt VMs.
+func HasBackend(backend string) bool {
+	for _, c := range Contexts() {
+		if c.Backend == backend {
+			return true
+		}
+	}
+	return false
+}
+
 func AddContext(c ContextConfig) error {
 	if c.Name == "" || c.Backend == "" {
 		return fmt.Errorf("context name and backend are required")

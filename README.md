@@ -88,6 +88,17 @@ One line — detects OS/arch, installs the rolling-release binary to
 curl -fsSL https://raw.githubusercontent.com/tuna-os/corral/main/scripts/install.sh | sh
 ```
 
+<details><summary>…or via <code>brew</code> (Linux &amp; macOS)</summary>
+
+Tagged releases land in the [tuna-os tap](https://github.com/tuna-os/homebrew-tap),
+so `brew upgrade` keeps you current. The formula is `corral-vm` (homebrew/core
+already has an unrelated `corral`), but it still installs the `corral` command:
+
+```bash
+brew install tuna-os/tap/corral-vm
+```
+</details>
+
 <details><summary>…or grab the binary yourself</summary>
 
 Rolling release, rebuilt from `main` on every push — not a CI artifact, so
@@ -131,6 +142,19 @@ install corral ~/.local/bin/
 </details>
 
 Optional: `corral completion fish | source` (bash/zsh/fish, via Cobra).
+
+**Run the dashboard as a service.** One command installs a systemd unit so
+`corral web` starts at boot and restarts on failure:
+
+```bash
+corral web service install                  # per-user unit (no root)
+corral web service install --system \        # or machine-wide (run under sudo)
+  --addr "$(tailscale ip -4):8006"
+corral web service status                    # / uninstall / print
+```
+
+Per-user units need lingering to run while logged out:
+`sudo loginctl enable-linger "$USER"`.
 
 Development tasks run through [`just`](https://github.com/casey/just): `just`
 lists them — `build`, `test`, `vet`, `ci` (the pre-push gate), and

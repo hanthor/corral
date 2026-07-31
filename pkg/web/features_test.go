@@ -845,6 +845,7 @@ func TestHandleListVMs_KubectlDown(t *testing.T) {
 }
 
 func TestHandleNodes_KubectlDown(t *testing.T) {
+	forceKubevirt(t)
 	fx := NewTestFixture()
 	defer fx.Server.Close()
 

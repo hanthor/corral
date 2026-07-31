@@ -923,10 +923,22 @@ type nodeResp struct {
 
 func handleNodes(w http.ResponseWriter, r *http.Request) {
 	// This host appears as a synthetic node whenever it has local QEMU VMs,
-	// so they group under one tree entry alongside the cluster nodes.
+	// so they group under one tree entry alongside any cluster nodes.
 	var localNode []nodeResp
 	if len(localVMs()) > 0 {
-		localNode = []nodeResp{{Name: "local", Ready: true, Roles: "this host (qemu)"}}
+		localNode = []nodeResp{{Name: "local", Ready: true, Roles: "this host"}}
+	}
+
+	// No KubeVirt context is configured, so there is no cluster to query and a
+	// failed kubectl would only produce a misleading "no cluster connected"
+	// error for a host that only runs local VMs (#91). Present the local host as
+	// a node (even before its first VM exists) and skip kubectl entirely.
+	if !config.HasBackend("kubevirt") {
+		if localNode == nil {
+			localNode = []nodeResp{{Name: "local", Ready: true, Roles: "this host"}}
+		}
+		jsonResp(w, http.StatusOK, localNode)
+		return
 	}
 
 	out, err := defaultRunner.Run("kubectl", "get", "nodes", "-o", "json")
