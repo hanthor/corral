@@ -161,6 +161,13 @@ func CapabilitiesForBackend(backend string) InstanceCapabilities {
 		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true, Snapshots: true}
 	case "libvirt":
 		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true, Snapshots: true}
+	case "proxmox":
+		// Consoles are declared off deliberately: PVE serves them over its own
+		// websocket and pkg/proxmoxbe can mint the tickets, but no bridge is
+		// wired yet — advertising a console nothing can open is the exact
+		// failure the parity conformance tests exist to catch.
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true,
+			Metrics: true, Snapshots: true, Migrate: true, Volumes: true, GPU: true}
 	default:
 		return InstanceCapabilities{}
 	}

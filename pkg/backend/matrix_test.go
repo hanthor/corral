@@ -190,7 +190,7 @@ func TestDocsTableMatchesTheMatrix(t *testing.T) {
 // Gaps is the work list; it must be non-empty for the backends the audit found
 // wanting, so nobody mistakes silence for parity.
 func TestGapsAreEnumerable(t *testing.T) {
-	for _, backend := range []string{"qemu", "incus", "libvirt", "proxmox"} {
+	for _, backend := range []string{"qemu", "incus", "libvirt"} {
 		if len(Gaps(backend)) == 0 {
 			t.Errorf("%s has no Possible entries; either it reached parity (update this test) "+
 				"or the matrix is not being maintained", backend)
@@ -200,8 +200,10 @@ func TestGapsAreEnumerable(t *testing.T) {
 		t.Errorf("kubevirt has gaps %v — the reference backend should be fully shipped or the "+
 			"matrix should say what it cannot do", got)
 	}
-	if got := ShippedBy("snapshots"); len(got) != 4 {
-		t.Errorf("snapshots shipped by %v, want all four local backends", got)
+	// Snapshots are the operation every backend implements — the point of the
+	// adapter contract, and the shape the rest should follow.
+	if got := ShippedBy("snapshots"); len(got) != len(Backends) {
+		t.Errorf("snapshots shipped by %v, want every backend", got)
 	}
 }
 

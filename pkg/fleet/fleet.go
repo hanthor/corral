@@ -12,6 +12,7 @@ import (
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/libvirt"
+	"github.com/tuna-os/corral/pkg/proxmoxbe"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -52,6 +53,11 @@ func List(ctx context.Context) Result {
 				vms, err = incus.NewClient(target.Context).List()
 			case "libvirt":
 				vms, err = libvirt.NewClient(target.Context).List()
+			case "proxmox":
+				var client *proxmoxbe.Client
+				if client, err = proxmoxbe.ClientForContext(target.Context); err == nil {
+					vms, err = client.List()
+				}
 			default:
 				err = fmt.Errorf("unsupported backend %q", target.Backend)
 			}

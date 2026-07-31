@@ -27,29 +27,29 @@ backend cannot, or it is meaningless there.
 
 | Operation | kubevirt | qemu | incus | libvirt | proxmox |
 |---|---|---|---|---|---|
-| List / inventory | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Create | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Start | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Stop | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Restart | ✅ | ✅ | 🔨 | 🔨 | 🔨 |
-| Pause / resume | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Delete | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| SSH | ✅ | ✅ | ✅ | 🔨 | 🔨 |
+| List / inventory | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Create | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Start | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Stop | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Restart | ✅ | ✅ | 🔨 | 🔨 | ✅ |
+| Pause / resume | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Delete | ✅ | ✅ | ✅ | ✅ | ✅ |
+| SSH | ✅ | ✅ | ✅ | 🔨 | ✅ |
 | Serial / shell console | ✅ | 🔨 | ✅ | 🔨 | 🔨 |
 | Graphical console (VNC) | ✅ | ✅ | 🔨 | ✅ | 🔨 |
 | RDP | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Live CPU / memory | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Snapshot / restore | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Migrate | ✅ | — | 🔨 | 🔨 | 🔨 |
-| Clone | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Template mark | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| CPU / memory edit | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Add / remove disks | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Expand disk | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| GPU passthrough | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Export / backup disk | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Events | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Tags | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
+| Live CPU / memory | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Snapshot / restore | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Migrate | ✅ | — | 🔨 | 🔨 | ✅ |
+| Clone | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Template mark | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| CPU / memory edit | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Add / remove disks | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Expand disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| GPU passthrough | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Export / backup disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Events | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Tags | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Published ports | ✅ | ✅ | 🔨 | — | — |
 | Containers (CT) | ✅ | — | ✅ | — | 🔨 |
 
@@ -112,8 +112,13 @@ rather than hand-maintained. `pkg/snapshot.Adapter` is the shape to copy, and
 matrix, so they stay current. The notes name the native mechanism, so none of
 these start from a blank page.
 
-**4. Add the Proxmox backend** per ADR-0009. It arrives after step 2 so it lands
-on the contract rather than adding a sixth `switch` arm.
+**4. Add the Proxmox backend** per ADR-0009. *Done for the operations above:*
+`pkg/proxmoxbe` drives a real PVE cluster over its HTTPS API, and it deliberately
+did **not** add a sixth arm to the `switch` sites — it registers a
+`pkg/snapshot` adapter (the one contract that exists) and implements
+`types.Backend`, leaving the rest behind `Client` methods for step 2 to attach.
+Its consoles are the honest exception: tickets are implemented, the websocket
+bridge is not, so the capability flags say no and the matrix says why.
 
 ## Gaps by backend
 
@@ -171,33 +176,12 @@ on the contract rather than adding a sixth `switch` arm.
 - **events** — virsh event / domain lifecycle events
 - **tags** — domain metadata
 
-### proxmox — 24 gaps
+### proxmox — 4 gaps
 
-- **list** — GET /cluster/resources?type=vm — ADR-0009
-- **create** — POST /nodes/{node}/qemu — ADR-0009
-- **start** — POST /nodes/{node}/qemu/{vmid}/status/start
-- **stop** — POST /nodes/{node}/qemu/{vmid}/status/shutdown
-- **restart** — POST …/status/reboot
-- **pause** — POST …/status/suspend and /resume
-- **delete** — DELETE /nodes/{node}/qemu/{vmid}
-- **ssh** — guest agent network-get-interfaces, then plain ssh
-- **tty** — POST …/termproxy + /vncwebsocket
-- **vnc** — POST …/vncproxy + GET /vncwebsocket
+- **tty** — termproxy tickets are implemented (pkg/proxmoxbe.TermTicket); the web websocket bridge is not wired yet
+- **vnc** — vncproxy tickets are implemented (pkg/proxmoxbe.VNCTicket); the web websocket bridge is not wired yet
 - **rdp** — same, via the guest address
-- **metrics** — GET …/rrddata and /status/current
-- **snapshots** — POST …/snapshot, /rollback — ADR-0009
-- **migrate** — POST …/migrate with online=1
-- **clone** — POST …/clone, full or linked
-- **template** — POST …/template — PVE has the concept natively
-- **scale** — POST …/config cores/memory, hotplug where enabled
-- **volumes** — POST …/config scsiN / unlink
-- **expand** — PUT …/resize
-- **gpu** — hostpci0 in the VM config
-- **export** — vzdump, then download the archive
-- **events** — GET /nodes/{node}/tasks and the task log
-- **tags** — the config's own tags field — PVE has tags natively
-- **containers** — /nodes/{node}/lxc — PVE containers map onto Corral CTs, ADR-0009
-
+- **containers** — pkg/proxmoxbe.Containers lists them and Create makes them; pkg/ct does not yet surface a non-Kubernetes CT
 
 ## Testing parity
 

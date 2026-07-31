@@ -19,7 +19,7 @@ hash of their name.
 
 ### Backend
 
-Where a VM's compute resources live. Four backends:
+Where a VM's compute resources live. Five backends:
 
 - **qemu** — local `qemu-system-x86_64` process managed via systemd user
   units. Networking via user-mode with hostfwd. Access through the host's
@@ -30,6 +30,12 @@ Where a VM's compute resources live. Four backends:
 - **incus** — an Incus container or VM on a named Incus remote.
 - **libvirt** — a libvirt domain reached through a local or remote URI;
   `qemu+ssh://host/system` is the remote-QEMU transport.
+- **proxmox** — a guest on a real Proxmox VE cluster, driven over PVE's HTTPS
+  API with a revocable token (`pkg/proxmoxbe`, ADR-0009). The only backend
+  that is an HTTP client rather than a command runner. PVE's two workload
+  types map onto Corral's: a qemu guest is a VM, an lxc guest is a CT.
+  Not to be confused with `pkg/proxmox`, which is the compat *server* —
+  Corral answering PVE's API on its own fleet.
 
 ### Context
 

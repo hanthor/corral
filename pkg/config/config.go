@@ -38,6 +38,28 @@ type ContextConfig struct {
 	Backend string `yaml:"backend" json:"backend"`
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Proxmox carries what a PVE endpoint needs beyond its host, and is only
+	// read when Backend is "proxmox". The token is a secret: prefer the
+	// CORRAL_PROXMOX_TOKEN environment variable, which overrides this field, so
+	// a config file that lands in a dotfiles repo does not carry cluster
+	// credentials with it.
+	Proxmox *ProxmoxContextConfig `yaml:"proxmox,omitempty" json:"proxmox,omitempty"`
+}
+
+// ProxmoxContextConfig is one PVE cluster's access details (ADR-0009).
+type ProxmoxContextConfig struct {
+	// Token is a PVE API token, "USER@REALM!TOKENID=UUID".
+	Token string `yaml:"token,omitempty" json:"-"`
+	// Fingerprint pins the server certificate (SHA-256 hex). Self-signed certs
+	// are the norm on PVE, and pinning trusts one specifically rather than
+	// trusting anything presented.
+	Fingerprint string `yaml:"fingerprint,omitempty" json:"fingerprint,omitempty"`
+	// Insecure skips verification entirely — explicit, per-context, never a
+	// default.
+	Insecure bool `yaml:"insecure,omitempty" json:"insecure,omitempty"`
+	// Node is the default node for operations that need one before the
+	// inventory has resolved (creates, mostly).
+	Node string `yaml:"node,omitempty" json:"node,omitempty"`
 }
 
 func (c ContextConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }

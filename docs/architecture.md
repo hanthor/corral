@@ -28,8 +28,11 @@ pkg/              Library code (importable)
 ├── catalog/      curated OS image catalog (containerdisks)
 ├── config/       ~/.config/tailvm/config.yaml reader (Tailscale auth key)
 ├── cronops/      shared CronJob/RBAC manifest builders for scheduled-op plugins (backup, snapsched, schedule)
+├── backend/      the parity matrix + conformance tests; see docs/backend-parity.md
 ├── ct/           Containers (CT) — pet pods, not KubeVirt VMs; see docs/adr/0005
 │   └── ct.go       Create/Start/Stop/Delete/List/Exists, distrobox-style persistent-rootfs bootstrap for privileged CTs
+├── proxmoxbe/    Proxmox VE as a backend — HTTPS API + token; see docs/adr/0009
+│                 (pkg/proxmox is the compat server — the other direction)
 ├── doctor/       cluster diagnostics + auto-fix (namespace, CDI, KubeVirt, GPU/PCI passthrough, StorageClass perf, etc.)
 ├── kubevirt/     KubeVirt backend (the heavy lifter)
 │   ├── client.go          VM CRUD, SSH via virtctl, cloud-init, registry

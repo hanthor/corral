@@ -63,7 +63,7 @@ var contextListCmd = &cobra.Command{Use: "list", Args: cobra.NoArgs, Run: func(*
 }}
 
 func init() {
-	contextAddCmd.Flags().StringVarP(&contextBackend, "backend", "b", "", "Backend: qemu, kubevirt, incus, or libvirt")
+	contextAddCmd.Flags().StringVarP(&contextBackend, "backend", "b", "", "Backend: qemu, kubevirt, incus, libvirt, or proxmox")
 	contextAddCmd.Flags().StringVar(&contextValue, "context", "", "kubeconfig context, Incus remote, or libvirt URI")
 	_ = contextAddCmd.MarkFlagRequired("backend")
 	contextCmd.AddCommand(contextGetCmd, contextUseCmd, contextAddCmd, contextRemoveCmd, contextListCmd)
