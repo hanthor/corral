@@ -150,7 +150,7 @@ func confirmMove(plan move.Plan) bool {
 }
 
 func init() {
-	moveCmd.Flags().StringVar(&moveTo, "to", "", "destination backend (qemu, libvirt)")
+	moveCmd.Flags().StringVar(&moveTo, "to", "", "destination backend (qemu, libvirt, kubevirt, proxmox)")
 	moveCmd.Flags().StringVar(&moveContext, "to-context", "", "destination context (Incus remote, kube context, libvirt URI)")
 	moveCmd.Flags().StringVar(&moveNamespace, "to-namespace", "", "destination namespace")
 	moveCmd.Flags().StringVar(&moveName, "name", "", "name on the destination (default: the source's name)")

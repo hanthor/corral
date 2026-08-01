@@ -382,7 +382,7 @@ func familyByName(name string) Family {
 // The destination half of a move: who can receive a disk, and does everyone
 // else explain why not.
 func TestIngestRefusalsAreExplained(t *testing.T) {
-	for _, backend := range []string{"qemu", "libvirt"} {
+	for _, backend := range []string{"qemu", "libvirt", "kubevirt", "proxmox"} {
 		if !CanIngest(backend) {
 			t.Errorf("%s should be able to receive a moved instance", backend)
 		}
@@ -391,7 +391,7 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		}
 	}
 	// A backend that cannot receive must say why, and name the alternative.
-	for _, backend := range []string{"incus", "kubevirt", "proxmox", "vmware"} {
+	for _, backend := range []string{"incus", "vmware"} {
 		if CanIngest(backend) {
 			t.Errorf("%s claims it can ingest", backend)
 		}
@@ -401,6 +401,31 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		}
 		if backend == "incus" && !strings.Contains(refusal, "but not a destination") {
 			t.Errorf("the Incus refusal should say it can still be a source: %q", refusal)
+		}
+	}
+}
+
+// Firmware is a refusal boundary, so which backends can express EFI boot is
+// worth pinning: a UEFI guest that lands on a BIOS-only target boots to a blank
+// screen, and the preflight only knows to stop it if this stays honest.
+func TestIngestersDeclareTheirFirmwareSupport(t *testing.T) {
+	for backend, want := range map[string]bool{
+		// qemu's generated systemd unit has no OVMF path yet.
+		"qemu": false,
+		// libvirt's domain XML selects firmware; KubeVirt sets
+		// firmware.bootloader.efi; PVE sets bios=ovmf plus an EFI vars disk.
+		"libvirt": true, "kubevirt": true, "proxmox": true,
+	} {
+		adapter, err := probe(backend)
+		if err != nil {
+			t.Fatalf("probing %s: %v", backend, err)
+		}
+		ingester, ok := adapter.(Ingester)
+		if !ok {
+			t.Fatalf("%s is not an Ingester", backend)
+		}
+		if got := ingester.AcceptsUEFI(); got != want {
+			t.Errorf("%s AcceptsUEFI = %v, want %v", backend, got, want)
 		}
 	}
 }

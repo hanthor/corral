@@ -1,6 +1,6 @@
 # ADR-0010: Moving an instance between backends
 
-**Status:** accepted, partially implemented
+**Status:** accepted, implemented
 **Date:** 2026-07-31
 
 ## Context
@@ -168,26 +168,37 @@ and move share one ingest path rather than growing a second.
 
 ## First slice: what is actually wired
 
-`pkg/move` and `corral move` exist. The supported set is smaller than the table
-above, and the gap is enforced by refusals rather than left to discovery:
+`pkg/move` and `corral move` exist, and every cell the table above promises is
+now wired except the Incus destination, which is refused by design:
 
 | From ↓ To → | qemu | libvirt | kubevirt | proxmox | incus |
 |---|---|---|---|---|---|
-| **kubevirt** | **yes** | **yes** | — | no | no |
-| **qemu** | — | **yes** | no | no | no |
-| **libvirt** | **yes** | — | no | no | no |
-| **proxmox** | no | no | no | — | no |
-| **incus (VM)** | **yes** | **yes** | no | no | — |
+| **kubevirt** | **yes** | **yes** | — | **yes** | no |
+| **qemu** | — | **yes** | **yes** | **yes** | no |
+| **libvirt** | **yes** | — | **yes** | **yes** | no |
+| **proxmox** | no¹ | no¹ | no¹ | — | no |
+| **incus (VM)** | **yes** | **yes** | **yes** | **yes** | — |
 
-Three things narrow it beyond what the ADR anticipated, each with a refusal that
+¹ Proxmox as a *source* needs an export adapter, which `pkg/export` does not
+have yet. It is a destination, not yet a source — the mirror image of Incus.
+
+Two things narrow it beyond what the ADR anticipated, each with a refusal that
 names the reason:
 
-- **Destinations are qemu and libvirt only.** They are the two
-  `backend.Ingester` implementations, and both delegate to the `bootc.Target`
-  that already puts a disk onto those backends — so a bootc disk and a moved
-  disk land the same way. KubeVirt (CDI upload) and Proxmox (the three-way
-  storage resolution below) are not implemented; `backend.IngestRefusal` says so
-  per backend.
+- **The four ingest paths, and what each costs.** qemu and libvirt delegate to
+  the `bootc.Target` that already puts a disk onto them, so a bootc disk and a
+  moved disk land the same way. KubeVirt uploads through CDI (`virtctl
+  image-upload` creates the DataVolume, and the VM then adopts the resulting
+  PVC as its boot disk — `PVC`, never `ImportURL`, since the disk is already in
+  the cluster). Proxmox uploads to a storage advertising the `import` content
+  type and creates with `import-from`; where no such storage exists it refuses
+  with the three ways forward, which is the bend in ADR-0009 described below.
+- **Firmware travels now.** A UEFI guest was previously refused everywhere but
+  libvirt. KubeVirt sets `firmware.bootloader.efi` and PVE sets `bios: ovmf`
+  plus an `efidisk0`, so only qemu — whose generated systemd unit has no OVMF
+  path — still refuses one. Secure Boot stays off on both: it needs an EFI vars
+  volume and a signed bootloader, and enabling it silently would break exactly
+  the imported guests this serves.
 - **Incus is a source, not a destination.** `pkg/export`'s Incus adapter grew a
   `qcow2` format for this: it exports the instance archive to scratch, pulls
   `backup/virtual-machine.img` out of it, and converts. Going through the

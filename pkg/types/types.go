@@ -217,6 +217,11 @@ type CreateOpts struct {
 	// ExistingDisk means the VM dir already holds a prepared disk.qcow2 (e.g.
 	// a bootc-built disk) — Create must boot it as-is, never recreate it.
 	ExistingDisk bool
+	// UEFI asks for an EFI boot path. A guest installed under UEFI that boots
+	// on a BIOS machine shows a blank screen and nothing else, so a backend
+	// that cannot express this must refuse rather than create something that
+	// looks fine until it is started (ADR-0010).
+	UEFI bool
 }
 
 // PortMap maps protocol names to port numbers.

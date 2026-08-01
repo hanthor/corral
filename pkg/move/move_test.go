@@ -42,8 +42,8 @@ type stub struct {
 func newStub(t *testing.T) *stub {
 	t.Helper()
 	s := &stub{
-		ingestable: map[string]bool{"qemu": true, "libvirt": true},
-		uefiOK:     map[string]bool{"libvirt": true},
+		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true},
+		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true},
 		formats: map[string][]export.Format{
 			"kubevirt": {export.RawGz, export.Qcow2},
 			"qemu":     {export.Qcow2, export.RawGz},
@@ -629,7 +629,7 @@ func TestPairsMatchTheADR(t *testing.T) {
 	_ = s
 
 	sources := []string{"kubevirt", "qemu", "libvirt", "incus"}
-	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": false, "proxmox": false, "incus": false}
+	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": false}
 
 	for _, from := range sources {
 		for dst, want := range destinations {

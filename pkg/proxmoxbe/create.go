@@ -46,7 +46,11 @@ type CreateOpts struct {
 	// default PVE uses and ADR-0005 models.
 	Privileged bool
 	Tags       []string
-	Start      bool
+	// UEFI selects OVMF firmware plus an EFI vars disk. A guest installed under
+	// UEFI boots to a blank screen on PVE's SeaBIOS default, so this has to
+	// travel with an imported disk (ADR-0010).
+	UEFI  bool
+	Start bool
 }
 
 // Create makes a guest and returns its task. It does not wait: creation of a
@@ -163,6 +167,14 @@ func (c *Client) createParams(opts CreateOpts, vmid int) (url.Values, Kind, erro
 	case opts.ISO != "":
 		params["ide2"] = opts.ISO + ",media=cdrom"
 		params["boot"] = "order=scsi0;ide2"
+	}
+	if opts.UEFI {
+		params["bios"] = "ovmf"
+		// OVMF needs somewhere to keep its variables, and PVE will not start a
+		// VM with bios=ovmf and no efidisk0. pre-enrolled-keys=0 leaves Secure
+		// Boot off: enrolling Microsoft's keys silently would stop an imported
+		// guest with an unsigned bootloader from starting.
+		params["efidisk0"] = fmt.Sprintf("%s:1,efitype=4m,pre-enrolled-keys=0", storage)
 	}
 	if opts.Password != "" {
 		params["cipassword"] = opts.Password
