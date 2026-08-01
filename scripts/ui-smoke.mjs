@@ -188,6 +188,22 @@ check(refusedRes.status === 200 && refused.ok === false, 'a move onto incus is r
 check((refused.refusals || []).every((r) => r.reason), 'every refusal carries a reason');
 
 
+// ── /metrics (ADR-0011) ───────────────────────────────────────────
+// The endpoint answers whether or not collection is on: a scraper that gets a
+// 503 records nothing, and "corral is up but not collecting" is the state
+// worth alerting on, so it is a metric rather than an error.
+const metricsRes = await fetch(`${BASE}metrics`);
+const metricsBody = await metricsRes.text();
+check(metricsRes.status === 200, '/metrics answers 200');
+check(
+  (metricsRes.headers.get('content-type') || '').startsWith('text/plain'),
+  '/metrics serves the exposition content type',
+);
+check(
+  metricsBody.includes('# TYPE corral_collection_success gauge'),
+  '/metrics always reports whether collection is working',
+);
+
 check(pageErrors.length === 0, `no JS page errors (${pageErrors.join('; ').slice(0, 200)})`);
 
 await browser.close();
