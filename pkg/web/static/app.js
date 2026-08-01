@@ -208,9 +208,17 @@ async function loadInstanceTypes() {
 // KubeVirt: unlike node, it doesn't change under live migration).
 
 const TREE_VIEW_KEY = 'corral-tree-view';
-const TREE_VIEWS = ['server', 'folder', 'pool'];
-let treeView = TREE_VIEWS.includes(localStorage.getItem(TREE_VIEW_KEY))
-  ? localStorage.getItem(TREE_VIEW_KEY) : 'server';
+const TREE_VIEWS = ['server', 'namespace', 'pool'];
+// 'folder' was this view's name before user-defined pools existed. Two things
+// called folders side by side was confusing, so it became Namespace View — but
+// the old value is still in people's localStorage, and silently resetting their
+// sidebar to Server View would be a worse greeting than a one-line migration.
+function storedTreeView() {
+  const stored = localStorage.getItem(TREE_VIEW_KEY);
+  if (stored === 'folder') return 'namespace';
+  return TREE_VIEWS.includes(stored) ? stored : 'server';
+}
+let treeView = storedTreeView();
 
 function setTreeView(v) {
   treeView = v;
@@ -235,7 +243,7 @@ function treeViewToggle() {
   div.className = 'tree-view-toggle';
   div.innerHTML = `
     <button type="button" class="btn sm${treeView === 'server' ? ' active' : ''}" data-view="server">Server View</button>
-    <button type="button" class="btn sm${treeView === 'folder' ? ' active' : ''}" data-view="folder">Folder View</button>
+    <button type="button" class="btn sm${treeView === 'namespace' ? ' active' : ''}" data-view="namespace" title="Group by Kubernetes namespace">Namespace View</button>
     <button type="button" class="btn sm${treeView === 'pool' ? ' active' : ''}" data-view="pool" title="User-defined pools; drag to regroup or to move between backends">Pool View</button>`;
   div.querySelectorAll('[data-view]').forEach((b) => {
     b.onclick = () => setTreeView(b.dataset.view);
@@ -281,7 +289,7 @@ function renderTree() {
   }));
 
   if (treeView === 'pool') renderTreePools(tree);
-  else if (treeView === 'folder') renderTreeFolders(tree);
+  else if (treeView === 'namespace') renderTreeNamespaces(tree);
   else renderTreeServer(tree);
 }
 
@@ -329,10 +337,14 @@ function renderTreeServer(tree) {
   for (const c of ctOrphans) tree.appendChild(ctRow(c, 1));
 }
 
-// Folder View: Datacenter → Namespace → VMs/CTs (templates included — they're
-// still VMs in their namespace, just labeled differently by vmRow). Namespace
-// is stable across live migration, unlike node.
-function renderTreeFolders(tree) {
+// Namespace View: Datacenter → Namespace → VMs/CTs (templates included —
+// they're still VMs in their namespace, just labeled differently by vmRow).
+// Namespace is stable across live migration, unlike node.
+//
+// This groups by an axis the *backend* defines. Pool View groups by one the
+// operator defines (ADR-0008); the names have to differ or nobody can tell
+// which tree they are looking at.
+function renderTreeNamespaces(tree) {
   const byNS = new Map();
   for (const vm of vms) {
     const ns = vm.namespace || '(none)';
@@ -845,7 +857,7 @@ function renderNode(main, name) {
   bindCTTable(main);
 }
 
-// Folder View's namespace detail — same shape as renderNode, grouped by
+// Namespace View's namespace detail — same shape as renderNode, grouped by
 // namespace instead of node.
 function renderNamespace(main, name) {
   const nsVMs = vms.filter((v) => (v.namespace || '(none)') === name);
