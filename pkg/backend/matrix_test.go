@@ -336,10 +336,26 @@ func TestForRejectsWhatItCannotServe(t *testing.T) {
 // is also the clearest statement of the parity problem: one backend implements
 // everything and the others implement a fraction.
 func TestImplementedSummarisesEachBackend(t *testing.T) {
-	kubevirt := Implemented("kubevirt")
-	if len(kubevirt) != len(Families) {
-		t.Errorf("kubevirt implements %d of %d families (%v) — the reference backend should be complete",
-			len(kubevirt), len(Families), kubevirt)
+	// Counted over the families that carry matrix operations. Ingester is
+	// deliberately excluded: it is the destination half of a move (ADR-0010),
+	// has no matrix row, and the backend that implements every *instance*
+	// operation is not the one that can necessarily receive a disk — qemu and
+	// libvirt can, KubeVirt cannot yet.
+	operational := 0
+	for _, family := range Families {
+		if len(family.Operations) > 0 {
+			operational++
+		}
+	}
+	kubevirt := 0
+	for _, name := range Implemented("kubevirt") {
+		if familyByName(name).Operations != nil {
+			kubevirt++
+		}
+	}
+	if kubevirt != operational {
+		t.Errorf("kubevirt implements %d of %d operational families (%v) — the reference backend should be complete",
+			kubevirt, operational, Implemented("kubevirt"))
 	}
 	for _, backend := range []string{"qemu", "incus", "libvirt"} {
 		if got := Implemented(backend); len(got) >= len(Families) {
@@ -351,5 +367,40 @@ func TestImplementedSummarisesEachBackend(t *testing.T) {
 	}
 	if got := Implemented("vmware"); got != nil {
 		t.Errorf("Implemented on an unknown backend = %v, want nil", got)
+	}
+}
+
+func familyByName(name string) Family {
+	for _, family := range Families {
+		if family.Name == name {
+			return family
+		}
+	}
+	return Family{}
+}
+
+// The destination half of a move: who can receive a disk, and does everyone
+// else explain why not.
+func TestIngestRefusalsAreExplained(t *testing.T) {
+	for _, backend := range []string{"qemu", "libvirt"} {
+		if !CanIngest(backend) {
+			t.Errorf("%s should be able to receive a moved instance", backend)
+		}
+		if got := IngestRefusal(backend); got != "" {
+			t.Errorf("%s can ingest but returns a refusal: %q", backend, got)
+		}
+	}
+	// A backend that cannot receive must say why, and name the alternative.
+	for _, backend := range []string{"incus", "kubevirt", "proxmox", "vmware"} {
+		if CanIngest(backend) {
+			t.Errorf("%s claims it can ingest", backend)
+		}
+		refusal := IngestRefusal(backend)
+		if refusal == "" {
+			t.Errorf("%s cannot ingest and gives no reason", backend)
+		}
+		if backend == "incus" && !strings.Contains(refusal, "source but not a destination") {
+			t.Errorf("the Incus refusal should say it can still be a source: %q", refusal)
+		}
 	}
 }
