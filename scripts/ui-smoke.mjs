@@ -110,6 +110,16 @@ check(updated.accent === '#22c55e' || updated.error, 'PUT /api/theme accepts acc
 // behave differently: a pool drop regroups silently, a backend drop must open
 // the preflight and change nothing until it is confirmed.
 
+// The three views are named for what they group by: the node the backend put a
+// guest on, the namespace the backend defines, and the pool the operator does.
+// Two of them used to be called folders.
+check(await page.locator('#tree >> text=Namespace View').count() > 0, 'Namespace View replaces the old Folder View');
+check(await page.locator('#tree >> text=Folder View').count() === 0, 'nothing is called Folder View any more');
+
+await page.click('#tree >> text=Namespace View');
+await page.waitForTimeout(600);
+check(await page.locator('#tree .tree-item').count() > 2, 'Namespace View renders a tree');
+
 await page.click('#tree >> text=Pool View');
 await page.waitForTimeout(600);
 check(await page.locator('#tree >> text=Pools').count() > 0, 'Pool View renders the pools section');

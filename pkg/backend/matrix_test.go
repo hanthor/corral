@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/corral/pkg/export"
 	"github.com/tuna-os/corral/pkg/snapshot"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -126,6 +127,25 @@ func TestSnapshotAdaptersAgreeWithTheMatrix(t *testing.T) {
 			if _, err := snapshot.For(types.InstanceRef{Backend: backend, Name: "probe"}); err != nil {
 				t.Errorf("snapshot.Supported(%q) is true but For returns %v", backend, err)
 			}
+		}
+	}
+}
+
+// pkg/export is the other real per-backend registry, and the export row had
+// silently gone stale against it — three backends listed as "possible" while
+// their adapters had been shipping for releases. A matrix that drifts is worse
+// than no matrix, so this ties the row to the registry the same way snapshots
+// are tied.
+func TestExportAdaptersAgreeWithTheMatrix(t *testing.T) {
+	for _, backend := range Backends {
+		entry, _ := Get("export", backend)
+		supported := export.Supported(backend)
+		if (entry.Support == Shipped) != supported {
+			t.Errorf("export/%s: matrix says %q, export.Supported says %v",
+				backend, entry.Support, supported)
+		}
+		if supported && len(export.Formats(backend)) == 0 {
+			t.Errorf("export.Supported(%q) is true but it advertises no formats", backend)
 		}
 	}
 }
@@ -382,7 +402,7 @@ func familyByName(name string) Family {
 // The destination half of a move: who can receive a disk, and does everyone
 // else explain why not.
 func TestIngestRefusalsAreExplained(t *testing.T) {
-	for _, backend := range []string{"qemu", "libvirt"} {
+	for _, backend := range []string{"qemu", "libvirt", "kubevirt", "proxmox"} {
 		if !CanIngest(backend) {
 			t.Errorf("%s should be able to receive a moved instance", backend)
 		}
@@ -391,7 +411,7 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		}
 	}
 	// A backend that cannot receive must say why, and name the alternative.
-	for _, backend := range []string{"incus", "kubevirt", "proxmox", "vmware"} {
+	for _, backend := range []string{"incus", "vmware"} {
 		if CanIngest(backend) {
 			t.Errorf("%s claims it can ingest", backend)
 		}
@@ -399,8 +419,75 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		if refusal == "" {
 			t.Errorf("%s cannot ingest and gives no reason", backend)
 		}
-		if backend == "incus" && !strings.Contains(refusal, "source but not a destination") {
+		if backend == "incus" && !strings.Contains(refusal, "but not a destination") {
 			t.Errorf("the Incus refusal should say it can still be a source: %q", refusal)
+		}
+	}
+}
+
+// Firmware is a refusal boundary, so which backends can express EFI boot is
+// worth pinning: a UEFI guest that lands on a BIOS-only target boots to a blank
+// screen, and the preflight only knows to stop it if this stays honest.
+func TestIngestersDeclareTheirFirmwareSupport(t *testing.T) {
+	for backend, want := range map[string]bool{
+		// qemu's generated systemd unit has no OVMF path yet.
+		"qemu": false,
+		// libvirt's domain XML selects firmware; KubeVirt sets
+		// firmware.bootloader.efi; PVE sets bios=ovmf plus an EFI vars disk.
+		"libvirt": true, "kubevirt": true, "proxmox": true,
+	} {
+		adapter, err := probe(backend)
+		if err != nil {
+			t.Fatalf("probing %s: %v", backend, err)
+		}
+		ingester, ok := adapter.(Ingester)
+		if !ok {
+			t.Fatalf("%s is not an Ingester", backend)
+		}
+		if got := ingester.AcceptsUEFI(); got != want {
+			t.Errorf("%s AcceptsUEFI = %v, want %v", backend, got, want)
+		}
+	}
+}
+
+// The docs carry a per-backend gap list under "### <backend> — N gaps", and it
+// is the part an operator reads to decide what to ask for. A count that drifts
+// from the matrix is worse than none: it reads as a promise about how much is
+// missing. The table above is already checked cell by cell; this checks the
+// prose that summarises it.
+func TestDocsGapCountsMatchTheMatrix(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/backend-parity.md")
+	if err != nil {
+		t.Fatalf("reading the parity doc: %v", err)
+	}
+	text := string(doc)
+
+	for _, backend := range Backends {
+		gaps := Gaps(backend)
+		heading := fmt.Sprintf("### %s — %d gaps", backend, len(gaps))
+		if len(gaps) == 0 {
+			continue
+		}
+		if !strings.Contains(text, heading) {
+			// Show what the doc claims, so the fix is obvious.
+			claimed := "no heading at all"
+			if idx := strings.Index(text, "### "+backend+" — "); idx >= 0 {
+				end := strings.Index(text[idx:], "\n")
+				claimed = text[idx : idx+end]
+			}
+			t.Errorf("the matrix has %d gaps for %s but the doc says %q",
+				len(gaps), backend, claimed)
+		}
+		// Every gap must actually be listed, or the count is right by accident.
+		for _, gap := range gaps {
+			bullet := "- **" + gap + "** —"
+			section := text[strings.Index(text, "### "+backend+" — "):]
+			if next := strings.Index(section[3:], "\n### "); next >= 0 {
+				section = section[:next+3]
+			}
+			if !strings.Contains(section, bullet) {
+				t.Errorf("%s's gap %q is missing from the doc's list", backend, gap)
+			}
 		}
 	}
 }

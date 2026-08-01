@@ -56,7 +56,7 @@ pkg/              Library code (importable)
     │                     doctor, plugins, NADs, NICs, images, instancetypes, datavolumes, boot options, ISO upload
     └── static/
         ├── index.html    dark SPA shell, create dialog (6 source types), CT create dialog, build dialog
-        ├── app.js        API client, tree (Server View/Folder View, VMs+CTs merged), VM/CT detail panels
+        ├── app.js        API client, tree (Server/Namespace/Pool views, VMs+CTs merged), VM/CT detail panels
         │                 (Summary/Hardware/Options/Snapshots/Events/Console/Terminal), create wizards,
         │                 image library + import, bootc build streaming, mobile drawer
         ├── icons.js      inline Heroicon SVGs

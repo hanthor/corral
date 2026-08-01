@@ -47,7 +47,10 @@ The source is stopped, never deleted, unless --delete-source is passed.`,
 			return err
 		}
 
-		src := move.Source{VM: vm}
+		// Ask the source about its firmware and guest OS before planning: a
+		// UEFI guest that lands on a BIOS-default target boots to a blank
+		// screen, and the preflight can only refuse what it knows.
+		src := move.Inspect(vm, false)
 		plan := move.Preflight(src, move.Target{
 			Backend:      moveTo,
 			Context:      moveContext,
@@ -150,7 +153,7 @@ func confirmMove(plan move.Plan) bool {
 }
 
 func init() {
-	moveCmd.Flags().StringVar(&moveTo, "to", "", "destination backend (qemu, libvirt)")
+	moveCmd.Flags().StringVar(&moveTo, "to", "", "destination backend (qemu, libvirt, kubevirt, proxmox)")
 	moveCmd.Flags().StringVar(&moveContext, "to-context", "", "destination context (Incus remote, kube context, libvirt URI)")
 	moveCmd.Flags().StringVar(&moveNamespace, "to-namespace", "", "destination namespace")
 	moveCmd.Flags().StringVar(&moveName, "name", "", "name on the destination (default: the source's name)")

@@ -874,6 +874,18 @@ func GenerateVM(opts types.CreateOpts) map[string]any {
 			},
 		},
 	}
+	if opts.UEFI {
+		// A guest whose disk was installed under UEFI has its bootloader in an
+		// ESP and nothing in the MBR, so it boots to a blank screen on the
+		// default BIOS firmware. secureBoot is left off: it needs an EFI vars
+		// PVC and a signed bootloader, and turning it on silently would break
+		// exactly the imported guests this exists to serve.
+		domain["firmware"] = map[string]any{
+			"bootloader": map[string]any{
+				"efi": map[string]any{"secureBoot": false},
+			},
+		}
+	}
 	// An instancetype supplies CPU/memory (and hotplug headroom); only set the
 	// domain cpu/memory when not using one.
 	if opts.InstanceType == "" {

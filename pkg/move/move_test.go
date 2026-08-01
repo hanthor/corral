@@ -42,13 +42,13 @@ type stub struct {
 func newStub(t *testing.T) *stub {
 	t.Helper()
 	s := &stub{
-		ingestable: map[string]bool{"qemu": true, "libvirt": true},
-		uefiOK:     map[string]bool{"libvirt": true},
+		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true},
+		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true},
 		formats: map[string][]export.Format{
 			"kubevirt": {export.RawGz, export.Qcow2},
 			"qemu":     {export.Qcow2, export.RawGz},
 			"libvirt":  {export.Qcow2, export.RawGz},
-			"incus":    {export.IncusTar},
+			"incus":    {export.IncusTar, export.Qcow2},
 		},
 		free: 1 << 40,
 	}
@@ -227,8 +227,26 @@ func TestPreflightRefusesIncusAsADestination(t *testing.T) {
 	}
 }
 
-func TestPreflightRefusesIncusAsASourceBecauseItsExportIsNotADisk(t *testing.T) {
+// Incus is a source now that its export adapter can produce a qcow2 of the
+// boot disk. It is still not a destination — those are different problems.
+func TestPreflightAllowsIncusAsASource(t *testing.T) {
 	newStub(t)
+	src := sourceVM()
+	src.VM.Backend = "incus"
+	plan := Preflight(src, to("qemu"))
+	if !plan.OK() {
+		t.Fatalf("incus → qemu should be allowed:\n%s", refusalText(plan))
+	}
+	if plan.Format != export.Qcow2 {
+		t.Errorf("format = %q, want qcow2 — the archive is not bootable elsewhere", plan.Format)
+	}
+}
+
+// A backend whose only artifact is its own archive still cannot be a source,
+// and the refusal has to say why rather than failing at qemu-img.
+func TestPreflightRefusesASourceWhoseExportIsNotADisk(t *testing.T) {
+	s := newStub(t)
+	s.formats["incus"] = []export.Format{export.IncusTar}
 	src := sourceVM()
 	src.VM.Backend = "incus"
 	mustRefuse(t, Preflight(src, to("qemu")), "not a disk image")
@@ -610,8 +628,8 @@ func TestPairsMatchTheADR(t *testing.T) {
 	acceptsUEFI, formatsFor = destinationAcceptsUEFI, export.Formats
 	_ = s
 
-	sources := []string{"kubevirt", "qemu", "libvirt"}
-	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": false, "proxmox": false, "incus": false}
+	sources := []string{"kubevirt", "qemu", "libvirt", "incus"}
+	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": false}
 
 	for _, from := range sources {
 		for dst, want := range destinations {
@@ -626,5 +644,75 @@ func TestPairsMatchTheADR(t *testing.T) {
 					from, dst, plan.OK(), want, refusalText(plan))
 			}
 		}
+	}
+}
+
+// ── inspection (ADR-0010's firmware refusal) ──────────────────────
+
+func stubInspect(t *testing.T, info backend.GuestInfo) {
+	t.Helper()
+	previous := inspectGuest
+	inspectGuest = func(types.InstanceRef) backend.GuestInfo { return info }
+	t.Cleanup(func() { inspectGuest = previous })
+}
+
+// The hole this closes: every caller used to build a Source with UEFI unset,
+// which is indistinguishable from "this guest is BIOS". A UEFI guest moved to
+// qemu was accepted and produced a VM that boots to a blank screen.
+func TestInspectCarriesFirmwareIntoTheRefusal(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{UEFI: true})
+
+	src := Inspect(sourceVM().VM, false)
+	if !src.UEFI {
+		t.Fatal("Inspect did not carry the source's firmware")
+	}
+	mustRefuse(t, Preflight(src, to("qemu")), "boots via UEFI")
+}
+
+func TestInspectCarriesTheGuestOSIntoTheWarning(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{OSType: "windows"})
+
+	src := Inspect(sourceVM().VM, false)
+	if !strings.Contains(warningText(Preflight(src, to("qemu"))), "virtio drivers") {
+		t.Fatal("a Windows source should reach the virtio warning through Inspect")
+	}
+}
+
+// A backend that cannot answer must leave both unknown, which downgrades to the
+// warning rather than asserting the guest is BIOS.
+func TestInspectTreatsAnUnknownBackendAsUnknownNotAsBIOS(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{})
+
+	src := Inspect(sourceVM().VM, false)
+	plan := Preflight(src, to("qemu"))
+	if !plan.OK() {
+		t.Fatalf("an unknown firmware must not refuse the move:\n%s", refusalText(plan))
+	}
+	if !strings.Contains(warningText(plan), "did not record a guest OS type") {
+		t.Errorf("and it should warn instead:\n%s", warningText(plan))
+	}
+}
+
+func TestInspectPassesTheContainerFlagThrough(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{})
+	mustRefuse(t, Preflight(Inspect(sourceVM().VM, true), to("qemu")), "containers cannot be moved")
+}
+
+// The seam's default must be the real inspector, or every caller silently gets
+// "unknown" and the firmware refusal never fires in production while every test
+// still passes. pkg/backend covers what each adapter reports.
+func TestInspectSeamDefaultsToTheRealInspector(t *testing.T) {
+	got := inspectGuest(types.InstanceRef{Backend: "vmware", Name: "x"})
+	if got != (backend.GuestInfo{}) {
+		t.Fatalf("an unknown backend should inspect to the zero value, got %+v", got)
+	}
+	// A registered backend that cannot be reached must also answer "unknown"
+	// rather than erroring — Inspect has no error return for exactly that reason.
+	if got := inspectGuest(types.InstanceRef{Backend: "libvirt", Name: "nope"}); got.UEFI {
+		t.Errorf("an unreachable host must not be reported as UEFI: %+v", got)
 	}
 }

@@ -282,12 +282,12 @@ func TestMoveDestinations_SaysWhichBackendsCanReceiveAndWhy(t *testing.T) {
 			reason string
 		}{d.Can, d.Reason}
 	}
-	for _, want := range []string{"qemu", "libvirt"} {
+	for _, want := range []string{"qemu", "libvirt", "kubevirt", "proxmox"} {
 		if !byName[want].can {
 			t.Errorf("%s implements Ingester and should be a live drop target", want)
 		}
 	}
-	for _, want := range []string{"incus", "kubevirt", "proxmox"} {
+	for _, want := range []string{"incus"} {
 		entry, ok := byName[want]
 		if !ok {
 			t.Fatalf("%s is missing from the destinations list", want)

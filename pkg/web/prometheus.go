@@ -187,7 +187,7 @@ func renderMetrics(snap *metricsSnapshot, now time.Time) string {
 	// alert an operator wants.
 	seen := map[string]string{} // context -> backend
 	for _, vm := range snap.vms {
-		seen[vm.Context] = vm.Backend
+		seen[contextLabel(vm.Backend, vm.Context)] = vm.Backend
 	}
 	for _, name := range contextNames() {
 		if _, ok := seen[name]; !ok {
@@ -222,7 +222,7 @@ func renderMetrics(snap *metricsSnapshot, now time.Time) string {
 	base := func(vm types.VM) map[string]string {
 		return map[string]string{
 			"name": vm.Name, "backend": vm.Backend,
-			"context": vm.Context, "namespace": vm.Namespace,
+			"context": contextLabel(vm.Backend, vm.Context), "namespace": vm.Namespace,
 			"pool": poolOf(vm),
 		}
 	}
@@ -263,7 +263,7 @@ func renderMetrics(snap *metricsSnapshot, now time.Time) string {
 	// ── fleet and pool aggregates ────────────────────────────────
 	counts := map[[3]string]int{}
 	for _, vm := range snap.vms {
-		counts[[3]string{vm.Backend, vm.Context, stateOf(vm)}]++
+		counts[[3]string{vm.Backend, contextLabel(vm.Backend, vm.Context), stateOf(vm)}]++
 	}
 	out.Metric("corral_instances", "gauge",
 		"Instances by backend, context, and state")
@@ -392,6 +392,31 @@ func contextNames() []string {
 		out = append(out, c.Name)
 	}
 	return out
+}
+
+// contextLabel resolves an instance's backend context string to the name the
+// operator gave that context in config.
+//
+// The two are not the same, and the difference used to make the metrics
+// unjoinable: fleet.List keys its per-context errors by the *config name*
+// ("kubevirt") while the instances it returns carry the *backend context*
+// ("" for the current kubeconfig context). So corral_backend_up{context="kubevirt"}
+// and corral_instance_running{context=""} described the same cluster under two
+// labels, and no query could relate them.
+//
+// The config name wins because it is the identifier an operator recognises —
+// the one in their config file and in the UI's context switcher. A context that
+// is not in the config (a peer, or one removed since) falls back to its raw
+// value rather than vanishing.
+var contextLabel = resolveContextLabel
+
+func resolveContextLabel(backendName, contextName string) string {
+	for _, c := range config.Contexts() {
+		if c.Backend == backendName && c.Context == contextName {
+			return c.Name
+		}
+	}
+	return contextName
 }
 
 func backendOfContext(name string) string {

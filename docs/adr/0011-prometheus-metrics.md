@@ -71,6 +71,14 @@ the collector ran and failed outright.
     corral_pool_instances{pool}
     corral_pool_running{pool}
 
+`context` is the name the operator gave that context in config, not the
+backend's own context string. The two differ — `fleet.List` keys its per-context
+errors by the config name while the instances it returns carry the backend
+context — and using the raw value would leave `corral_backend_up{context="kubevirt"}`
+and `corral_instance_running{context=""}` describing one cluster under two
+labels that no query could relate. A context absent from the config (a peer, or
+one removed since) keeps its raw value rather than vanishing.
+
 `pool` is the load-bearing one and the reason this exists rather than four
 exporters: it is the only label that spans backends, and it is what makes
 `sum by (pool) (corral_instance_running)` mean "is my application stack up"

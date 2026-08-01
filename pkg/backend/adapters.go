@@ -139,10 +139,6 @@ func (a kubevirtAdapter) Events(name string) ([]Event, error) {
 	return out, nil
 }
 
-func (a kubevirtAdapter) Export(name, destination string) (string, error) {
-	return a.client.Export(name, "", destination)
-}
-
 // ── local QEMU ────────────────────────────────────────────────────
 //
 // Power plus a real restart. Everything else is a gap the matrix names: the unit
@@ -176,6 +172,8 @@ func (a incusAdapter) Start(name string) error  { return a.client.Start(name) }
 func (a incusAdapter) Stop(name string) error   { return a.client.Stop(name) }
 func (a incusAdapter) Delete(name string) error { return a.client.Delete(name) }
 
+func (a incusAdapter) Restart(name string) error { return a.client.Restart(name) }
+
 func (a incusAdapter) Address(name string) (string, error) {
 	instances, err := a.client.ListInstances()
 	if err != nil {
@@ -195,9 +193,10 @@ type libvirtAdapter struct{ client libvirt.Client }
 
 func (libvirtAdapter) Backend() string { return "libvirt" }
 
-func (a libvirtAdapter) Start(name string) error  { return a.client.Start(name) }
-func (a libvirtAdapter) Stop(name string) error   { return a.client.Stop(name) }
-func (a libvirtAdapter) Delete(name string) error { return a.client.Delete(name) }
+func (a libvirtAdapter) Start(name string) error   { return a.client.Start(name) }
+func (a libvirtAdapter) Stop(name string) error    { return a.client.Stop(name) }
+func (a libvirtAdapter) Delete(name string) error  { return a.client.Delete(name) }
+func (a libvirtAdapter) Restart(name string) error { return a.client.Restart(name) }
 
 // ── Proxmox ───────────────────────────────────────────────────────
 //
@@ -383,23 +382,6 @@ func (a proxmoxAdapter) Events(name string) ([]Event, error) {
 		})
 	}
 	return out, nil
-}
-
-func (a proxmoxAdapter) Export(name, destination string) (string, error) {
-	client, err := a.client()
-	if err != nil {
-		return "", err
-	}
-	// destination names a PVE storage here, not a local path: vzdump writes the
-	// archive on the cluster and downloading it is a separate step by design.
-	task, err := client.Backup(name, destination, "")
-	if err != nil {
-		return "", err
-	}
-	if err := client.WaitTask(task, proxmoxbe.DefaultTimeout); err != nil {
-		return "", err
-	}
-	return destination, nil
 }
 
 func (a proxmoxAdapter) Address(name string) (string, error) {

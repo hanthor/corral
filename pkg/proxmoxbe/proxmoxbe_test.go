@@ -12,9 +12,12 @@ package proxmoxbe
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1167,5 +1170,161 @@ func TestConsoleTicketsCarryEnoughToOpenTheWebsocket(t *testing.T) {
 	}
 	if !term.Serial {
 		t.Error("a termproxy ticket is the serial console")
+	}
+}
+
+// ── disk import (ADR-0010) ────────────────────────────────────────
+
+func TestImportStorage_PrefersShared(t *testing.T) {
+	f := newFakePVE(t)
+	f.on("GET /storage", []map[string]any{
+		{"storage": "local", "type": "dir", "content": "iso,vztmpl,backup"},
+		{"storage": "local-import", "type": "dir", "content": "images,import", "shared": 0},
+		{"storage": "ceph-import", "type": "rbd", "content": "images,import", "shared": 1},
+	})
+
+	got, err := f.client().ImportStorage()
+	if err != nil {
+		t.Fatalf("ImportStorage: %v", err)
+	}
+	// On a cluster, an image on a node-local storage can only seed a VM on that
+	// one node — which turns a move into a placement the operator did not make.
+	if got.Storage != "ceph-import" {
+		t.Fatalf("storage = %q, want the shared one", got.Storage)
+	}
+}
+
+func TestImportStorage_FallsBackToLocal(t *testing.T) {
+	f := newFakePVE(t)
+	f.on("GET /storage", []map[string]any{
+		{"storage": "local", "type": "dir", "content": "iso,backup"},
+		{"storage": "local-import", "type": "dir", "content": "images,import", "shared": 0},
+	})
+	got, err := f.client().ImportStorage()
+	if err != nil {
+		t.Fatalf("ImportStorage: %v", err)
+	}
+	if got.Storage != "local-import" {
+		t.Fatalf("storage = %q", got.Storage)
+	}
+}
+
+// The refusal is the whole reason this is a preflight concern: a PVE with no
+// import-content storage cannot take a disk over the API at all, and the
+// operator needs the three ways forward rather than a failed upload.
+func TestImportStorage_RefusesWithTheThreeOptions(t *testing.T) {
+	f := newFakePVE(t)
+	f.on("GET /storage", []map[string]any{
+		{"storage": "local", "type": "dir", "content": "iso,vztmpl,backup"},
+	})
+	_, err := f.client().ImportStorage()
+	if err == nil {
+		t.Fatal("a PVE with no import storage accepted the upload")
+	}
+	for _, want := range []string{"import", "shared storage", "qm importdisk"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestUploadImport_StreamsTheFileAndReturnsAVolumeID(t *testing.T) {
+	f := newFakePVE(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "web-1.qcow2")
+	if err := os.WriteFile(path, []byte("QCOW2-BYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotContent, gotFilename, gotBody string
+	f.onFunc("POST /nodes/pve1/storage/ceph-import/upload", func(r *http.Request) (any, int) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("the upload was not multipart: %v", err)
+			return map[string]any{"message": "bad form"}, http.StatusBadRequest
+		}
+		gotContent = r.FormValue("content")
+		file, header, err := r.FormFile("filename")
+		if err != nil {
+			t.Errorf("no file part: %v", err)
+			return map[string]any{"message": "no file"}, http.StatusBadRequest
+		}
+		defer file.Close()
+		gotFilename = header.Filename
+		body, _ := io.ReadAll(file)
+		gotBody = string(body)
+		return nil, http.StatusOK
+	})
+
+	volume, err := f.client().UploadImport("pve1", "ceph-import", path)
+	if err != nil {
+		t.Fatalf("UploadImport: %v", err)
+	}
+	if gotContent != "import" {
+		t.Errorf("content = %q, want import", gotContent)
+	}
+	if gotFilename != "web-1.qcow2" {
+		t.Errorf("filename = %q", gotFilename)
+	}
+	if gotBody != "QCOW2-BYTES" {
+		t.Errorf("uploaded %q, want the disk's contents", gotBody)
+	}
+	if volume != "ceph-import:import/web-1.qcow2" {
+		t.Errorf("volume = %q, want a PVE volume id create can import from", volume)
+	}
+}
+
+func TestUploadImport_SurfacesAServerRefusal(t *testing.T) {
+	f := newFakePVE(t)
+	path := filepath.Join(t.TempDir(), "d.qcow2")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.fail("POST /nodes/pve1/storage/s/upload", http.StatusForbidden,
+		"only root@pam may upload import content")
+
+	_, err := f.client().UploadImport("pve1", "s", path)
+	if err == nil {
+		t.Fatal("a 403 was reported as a successful upload")
+	}
+	if !strings.Contains(err.Error(), "root@pam") {
+		t.Errorf("the server's reason was lost: %v", err)
+	}
+}
+
+// A UEFI guest needs OVMF *and* somewhere to keep its variables; PVE refuses to
+// start a bios=ovmf VM with no efidisk0, so the two must always travel together.
+func TestCreate_UEFIAddsAnEFIVarsDisk(t *testing.T) {
+	f := newFakePVE(t)
+	f.on("POST /nodes/pve1/qemu", "UPID:pve1:0000:create::")
+
+	if _, err := f.client().Create(CreateOpts{
+		Name: "win", Node: "pve1", Cores: 2, Mem: "4Gi", Storage: "local-lvm", UEFI: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	form := f.lastCall("POST", "/nodes/pve1/qemu").Form
+	if form.Get("bios") != "ovmf" {
+		t.Errorf("bios = %q, want ovmf", form.Get("bios"))
+	}
+	if !strings.Contains(form.Get("efidisk0"), "efitype=4m") {
+		t.Errorf("efidisk0 = %q, want an EFI vars disk", form.Get("efidisk0"))
+	}
+	// Enrolling Microsoft's keys would stop an imported guest with an unsigned
+	// bootloader — exactly the guests this path exists to serve.
+	if !strings.Contains(form.Get("efidisk0"), "pre-enrolled-keys=0") {
+		t.Errorf("Secure Boot keys were pre-enrolled: %q", form.Get("efidisk0"))
+	}
+}
+
+func TestCreate_BIOSByDefaultHasNoEFIDisk(t *testing.T) {
+	f := newFakePVE(t)
+	f.on("POST /nodes/pve1/qemu", "UPID:pve1:0000:create::")
+	if _, err := f.client().Create(CreateOpts{Name: "lin", Node: "pve1", Storage: "local-lvm"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	form := f.lastCall("POST", "/nodes/pve1/qemu").Form
+	if form.Get("bios") != "" || form.Get("efidisk0") != "" {
+		t.Errorf("a BIOS guest should not get OVMF: bios=%q efidisk0=%q",
+			form.Get("bios"), form.Get("efidisk0"))
 	}
 }

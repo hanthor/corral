@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/doctor"
 	"github.com/tuna-os/corral/pkg/fleet"
 	"github.com/tuna-os/corral/pkg/folder"
@@ -50,8 +51,15 @@ func sampleSnapshot() *metricsSnapshot {
 	}
 }
 
+// render exercises the exposition with the context resolver stubbed to the
+// identity, so a fixture's labels are the fixture's own and not whatever
+// contexts happen to be configured on the machine running the test.
+// TestContextLabelJoinsInstancesToTheirContext covers the real resolver.
 func render(t *testing.T, snap *metricsSnapshot, at time.Time) string {
 	t.Helper()
+	previous := contextLabel
+	contextLabel = func(_, contextName string) string { return contextName }
+	t.Cleanup(func() { contextLabel = previous })
 	return renderMetrics(snap, at)
 }
 
@@ -258,7 +266,7 @@ func TestStartMetricsCollectsFleetFoldersAndChecks(t *testing.T) {
 
 	collectMetrics(context.Background())
 
-	body := renderMetrics(metrics.snap, time.Now())
+	body := render(t, metrics.snap, time.Now())
 	mustLine(t, body, `corral_instance_running{backend="qemu",context="",name="one",namespace="",pool="lab"} 1`)
 	mustLine(t, body, `corral_pool_instances{pool="lab"} 1`)
 	if !strings.Contains(body, `corral_check{backend="",context="",name="kubectl present",severity="required"} 1`) {
@@ -281,7 +289,7 @@ func TestCollectionReportsAFailedContextThatReturnedNothing(t *testing.T) {
 	if !metrics.snap.ok {
 		t.Fatal("a collection with a reported error is still a successful collection — the error is its own series")
 	}
-	if !strings.Contains(renderMetrics(metrics.snap, time.Now()), `corral_backend_error{backend="",context="prod"} 1`) {
+	if !strings.Contains(render(t, metrics.snap, time.Now()), `corral_backend_error{backend="",context="prod"} 1`) {
 		t.Error("and the failing context must be reported")
 	}
 }
@@ -306,4 +314,75 @@ func getText(t *testing.T, srv *httptest.Server, path string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return string(body)
+}
+
+// The label that used to make the metrics unjoinable: fleet.List keys its
+// per-context errors by the config name while the instances it returns carry
+// the backend's own context string, so corral_backend_up and
+// corral_instance_running described the same cluster under two different
+// labels and no query could relate them.
+func TestContextLabelJoinsInstancesToTheirContext(t *testing.T) {
+	// The demo server configures real contexts; resolve against those.
+	newDemoServer(t)
+	var kubevirtContext string
+	for _, c := range config.Contexts() {
+		if c.Backend == "kubevirt" {
+			kubevirtContext = c.Name
+			if got := resolveContextLabel(c.Backend, c.Context); got != c.Name {
+				t.Errorf("resolveContextLabel(%q, %q) = %q, want the config name %q",
+					c.Backend, c.Context, got, c.Name)
+			}
+		}
+	}
+	if kubevirtContext == "" {
+		t.Skip("no kubevirt context configured in this environment")
+	}
+
+	// A context nobody configured keeps its raw value rather than vanishing —
+	// a peer, or one removed since the last collection, is still real.
+	if got := resolveContextLabel("kubevirt", "some-other-cluster"); got != "some-other-cluster" {
+		t.Errorf("an unconfigured context should keep its own name, got %q", got)
+	}
+}
+
+// End to end over one collection: the instance series and the reachability
+// series must carry the same context label, or a dashboard cannot join them.
+func TestMetricsInstanceAndBackendSeriesShareAContextLabel(t *testing.T) {
+	newDemoServer(t)
+	previousFleet, previousSnap := metricsFleet, metrics.snap
+	t.Cleanup(func() { metricsFleet, metrics.snap = previousFleet, previousSnap })
+	scratchFolders(t)
+
+	var configured config.ContextConfig
+	for _, c := range config.Contexts() {
+		if c.Backend == "kubevirt" {
+			configured = c
+		}
+	}
+	if configured.Name == "" {
+		t.Skip("no kubevirt context configured in this environment")
+	}
+
+	metricsFleet = func(context.Context) fleet.Result {
+		return fleet.Result{VMs: []types.VM{{
+			Name: "one", Backend: configured.Backend, Context: configured.Context, Running: true,
+		}}}
+	}
+	collectMetrics(context.Background())
+	body := renderMetrics(metrics.snap, time.Now())
+
+	want := `context="` + configured.Name + `"`
+	var onInstance, onBackend bool
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "corral_instance_running{") && strings.Contains(line, want) {
+			onInstance = true
+		}
+		if strings.HasPrefix(line, "corral_backend_up{") && strings.Contains(line, want) {
+			onBackend = true
+		}
+	}
+	if !onInstance || !onBackend {
+		t.Fatalf("the two series must agree on %s (instance=%v backend=%v):\n%s",
+			want, onInstance, onBackend, body)
+	}
 }

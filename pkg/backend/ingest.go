@@ -16,8 +16,11 @@ package backend
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/tuna-os/corral/pkg/bootc"
+	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/proxmoxbe"
 	"github.com/tuna-os/corral/pkg/types"
 )
 
@@ -97,6 +100,107 @@ func (a libvirtAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) 
 // UEFI guest has somewhere to land.
 func (libvirtAdapter) AcceptsUEFI() bool { return true }
 
+// ── kubevirt ──────────────────────────────────────────────────────
+
+// Ingest uploads the disk into a CDI DataVolume and creates a VM that adopts
+// the resulting PVC as its boot disk.
+//
+// `virtctl image-upload` is reused rather than reimplementing CDI's upload
+// protocol (UploadTokenRequest, then streaming to cdi-uploadproxy with a bearer
+// token): pkg/kubevirt already wraps it, including the retries and progress
+// that a multi-gigabyte upload over a self-signed proxy needs.
+func (a kubevirtAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) error {
+	namespace := ref.Namespace
+	if namespace == "" {
+		namespace = kubevirt.DefaultNamespace
+	}
+	size := shape.Disk
+	if size == "" {
+		size = "20Gi"
+	}
+	claim := ref.Name + "-disk"
+
+	// The upload creates the DataVolume and its PVC. Progress goes to stderr,
+	// which is where the CLI's other long operations report.
+	if err := kubevirt.UploadDataVolume(claim, namespace, disk, size,
+		kubevirt.PreferredStorageClass(), os.Stderr); err != nil {
+		return fmt.Errorf("uploading the disk into %s/%s: %w", namespace, claim, err)
+	}
+
+	// PVC, not ImportURL: the disk is already in the cluster, and pointing CDI
+	// at a URL would make it fetch what was just uploaded.
+	return kubevirt.CreateVM(types.CreateOpts{
+		Name: ref.Name, Namespace: namespace, Backend: "kubevirt",
+		CPU: shape.CPU, Mem: shape.Mem, Disk: size,
+		PVC: claim, SSHPublicKey: shape.SSHKey, UEFI: shape.UEFI,
+	})
+}
+
+// AcceptsUEFI: the generated VM sets firmware.bootloader.efi when asked, so a
+// UEFI guest has an ESP to boot from. Secure Boot is deliberately not enabled —
+// it needs an EFI vars volume and a signed bootloader, and switching it on
+// silently would break exactly the imported guests this serves.
+func (kubevirtAdapter) AcceptsUEFI() bool { return true }
+
+// ── proxmox ───────────────────────────────────────────────────────
+
+// Ingest uploads the disk to a storage that advertises the `import` content
+// type and creates a VM with `import-from` pointed at it.
+//
+// This is the one operation where ADR-0009's "API only" is conditional: a PVE
+// without an import-content storage genuinely cannot take a disk image over
+// HTTPS, and ImportStorage refuses with the three ways forward rather than
+// leaving a half-created VM behind.
+func (a proxmoxAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) error {
+	client, err := a.client()
+	if err != nil {
+		return err
+	}
+	storage, err := client.ImportStorage()
+	if err != nil {
+		return err
+	}
+	node := client.Node()
+	if node == "" {
+		nodes, err := client.Nodes()
+		if err != nil {
+			return err
+		}
+		for _, n := range nodes {
+			if n.Ready() {
+				node = n.Node
+				break
+			}
+		}
+	}
+	if node == "" {
+		return fmt.Errorf("proxmox: no ready node to upload the disk to")
+	}
+
+	volume, err := client.UploadImport(node, storage.Storage, disk)
+	if err != nil {
+		return err
+	}
+
+	task, err := client.Create(proxmoxbe.CreateOpts{
+		Name: ref.Name, Node: node,
+		Cores: shape.CPU, Mem: shape.Mem, Disk: shape.Disk,
+		Storage: storage.Storage, Image: volume,
+		SSHKeys: shape.SSHKey, Tags: shape.Tags,
+		UEFI: shape.UEFI,
+	})
+	if err != nil {
+		return err
+	}
+	// Creation with an import is minutes of disk copying; waiting means a
+	// caller that got no error has a VM, not a queued task.
+	return client.WaitTask(task, proxmoxbe.DefaultTimeout)
+}
+
+// AcceptsUEFI: PVE expresses this as `bios: ovmf` plus an EFI disk, which the
+// create path sets when asked.
+func (proxmoxAdapter) AcceptsUEFI() bool { return true }
+
 // ── the ones that cannot, and why ─────────────────────────────────
 //
 // These are deliberately *not* Ingester implementations: a stub that returned
@@ -118,14 +222,8 @@ func IngestRefusal(backend string) string {
 		// leaves the guest without the agent and config drive. The result would
 		// look like it worked and behave unlike every other Incus instance.
 		return "an Incus VM boots from Incus's own image store and has no supported way to adopt " +
-			"a foreign disk; Incus can be a move source but not a destination (see ADR-0010)"
-	case "kubevirt":
-		return "the CDI upload path is not wired into move yet (ADR-0010's first slice covers " +
-			"qemu and libvirt destinations); use `corral create --import` meanwhile"
-	case "proxmox":
-		return "PVE cannot accept a raw disk over its API on every version; a move here needs a " +
-			"storage advertising the import content type, a shared storage path, or SSH to a node " +
-			"(see ADR-0010) — not wired yet"
+			"a foreign disk; Incus is a move source (its export adapter produces a qcow2 of the " +
+			"boot disk) but not a destination (see ADR-0010)"
 	default:
 		return fmt.Sprintf("the %s backend has no ingest path", backend)
 	}
