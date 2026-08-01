@@ -2,6 +2,7 @@
 // Vanilla JS; noVNC + xterm.js vendored under static/vendor/ (offline-safe).
 
 import { icon } from './icons.js';
+import { bindPools, loadPools, renderTreePools } from './pools.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -131,6 +132,7 @@ async function refresh(force = false) {
     return;
   }
   offlineShown = false;
+  if (treeView === 'pool') await loadPools();
   try { cts = await api('/api/cts'); } catch { cts = []; } // best-effort — don't fail the whole refresh over CTs
   const fp = JSON.stringify([vms, cts, nodes, selected, tab]);
   if (!force && fp === lastRenderFp) return; // nothing changed — keep the DOM
@@ -206,12 +208,17 @@ async function loadInstanceTypes() {
 // KubeVirt: unlike node, it doesn't change under live migration).
 
 const TREE_VIEW_KEY = 'corral-tree-view';
-let treeView = localStorage.getItem(TREE_VIEW_KEY) === 'folder' ? 'folder' : 'server';
+const TREE_VIEWS = ['server', 'folder', 'pool'];
+let treeView = TREE_VIEWS.includes(localStorage.getItem(TREE_VIEW_KEY))
+  ? localStorage.getItem(TREE_VIEW_KEY) : 'server';
 
 function setTreeView(v) {
   treeView = v;
   localStorage.setItem(TREE_VIEW_KEY, v);
-  renderTree();
+  // Pool View reads a different source than the fleet poll, so switching into
+  // it fetches once rather than waiting out the next 5s cycle.
+  if (v === 'pool') loadPools().then(renderTree);
+  else renderTree();
 }
 
 function treeRow({ lvl, icon, label, sub, sel, onclick, dot }) {
@@ -228,7 +235,8 @@ function treeViewToggle() {
   div.className = 'tree-view-toggle';
   div.innerHTML = `
     <button type="button" class="btn sm${treeView === 'server' ? ' active' : ''}" data-view="server">Server View</button>
-    <button type="button" class="btn sm${treeView === 'folder' ? ' active' : ''}" data-view="folder">Folder View</button>`;
+    <button type="button" class="btn sm${treeView === 'folder' ? ' active' : ''}" data-view="folder">Folder View</button>
+    <button type="button" class="btn sm${treeView === 'pool' ? ' active' : ''}" data-view="pool" title="User-defined pools; drag to regroup or to move between backends">Pool View</button>`;
   div.querySelectorAll('[data-view]').forEach((b) => {
     b.onclick = () => setTreeView(b.dataset.view);
   });
@@ -272,7 +280,8 @@ function renderTree() {
     onclick: () => select({ type: 'settings' }),
   }));
 
-  if (treeView === 'folder') renderTreeFolders(tree);
+  if (treeView === 'pool') renderTreePools(tree);
+  else if (treeView === 'folder') renderTreeFolders(tree);
   else renderTreeServer(tree);
 }
 
@@ -2518,6 +2527,11 @@ function closeDrawer() { $('#tree').classList.remove('open'); }
 
 $('#btn-menu').innerHTML = icon('menu');
 $('#btn-create').innerHTML = `${icon('plus')} Create VM`;
+
+// Pool View borrows the tree's row builders rather than growing its own, so a
+// pool row and a node row stay visually identical — the difference is what a
+// drop onto one means, not how it looks.
+bindPools({ api, toast, esc, icon, refresh, treeRow, vmRow });
 
 loadWhoami();
 loadCaps();

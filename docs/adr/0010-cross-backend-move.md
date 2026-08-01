@@ -199,6 +199,30 @@ names the reason:
   Every backend that can export offers qcow2, so nothing is lost by naming the
   constraint instead of producing an artifact the destination rejects.
 
+### The web surface: drag to propose, never to commit
+
+`POST /api/move/preflight` and `POST /api/move` are two endpoints rather than
+one, and the split is what makes drag-and-drop safe. The Pool View tree holds
+two kinds of node and they behave differently by design:
+
+- Dropping a VM onto a **pool** reassigns folder membership. Nothing is touched,
+  so it commits immediately and is undone by dragging back.
+- Dropping a VM onto a **backend** proposes a move. The drop calls the
+  preflight — which changes nothing, so it is safe on a stray gesture — and what
+  comes back *is* the dialog: the steps, the warnings, the dropped
+  configuration, and any refusals. A refused plan has no confirm button.
+
+Backends that cannot receive a move are rendered inert with the reason on hover
+rather than accepting a drop and refusing afterwards. `POST /api/move` re-runs
+the preflight server-side before committing, so a client cannot skip the check
+and a plan that went stale between the drop and the click is caught. A refused
+preflight is a 200 (the refusals *are* the answer); a refused commit is a 409
+carrying the same list.
+
+The instance's folder membership follows it to the destination, since a move
+that silently drops a VM out of the grouping an operator organised it into is a
+worse surprise than the IP change.
+
 Also deviating from the sketch above: `Preflight` takes the `types.VM` the
 caller's inventory already holds rather than an `InstanceRef`, which keeps
 `pkg/move` out of the listing business — the same shape `pkg/web`'s folder
