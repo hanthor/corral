@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/corral/pkg/export"
 	"github.com/tuna-os/corral/pkg/snapshot"
 	"github.com/tuna-os/corral/pkg/types"
 )
@@ -126,6 +127,25 @@ func TestSnapshotAdaptersAgreeWithTheMatrix(t *testing.T) {
 			if _, err := snapshot.For(types.InstanceRef{Backend: backend, Name: "probe"}); err != nil {
 				t.Errorf("snapshot.Supported(%q) is true but For returns %v", backend, err)
 			}
+		}
+	}
+}
+
+// pkg/export is the other real per-backend registry, and the export row had
+// silently gone stale against it — three backends listed as "possible" while
+// their adapters had been shipping for releases. A matrix that drifts is worse
+// than no matrix, so this ties the row to the registry the same way snapshots
+// are tied.
+func TestExportAdaptersAgreeWithTheMatrix(t *testing.T) {
+	for _, backend := range Backends {
+		entry, _ := Get("export", backend)
+		supported := export.Supported(backend)
+		if (entry.Support == Shipped) != supported {
+			t.Errorf("export/%s: matrix says %q, export.Supported says %v",
+				backend, entry.Support, supported)
+		}
+		if supported && len(export.Formats(backend)) == 0 {
+			t.Errorf("export.Supported(%q) is true but it advertises no formats", backend)
 		}
 	}
 }
@@ -426,6 +446,48 @@ func TestIngestersDeclareTheirFirmwareSupport(t *testing.T) {
 		}
 		if got := ingester.AcceptsUEFI(); got != want {
 			t.Errorf("%s AcceptsUEFI = %v, want %v", backend, got, want)
+		}
+	}
+}
+
+// The docs carry a per-backend gap list under "### <backend> — N gaps", and it
+// is the part an operator reads to decide what to ask for. A count that drifts
+// from the matrix is worse than none: it reads as a promise about how much is
+// missing. The table above is already checked cell by cell; this checks the
+// prose that summarises it.
+func TestDocsGapCountsMatchTheMatrix(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/backend-parity.md")
+	if err != nil {
+		t.Fatalf("reading the parity doc: %v", err)
+	}
+	text := string(doc)
+
+	for _, backend := range Backends {
+		gaps := Gaps(backend)
+		heading := fmt.Sprintf("### %s — %d gaps", backend, len(gaps))
+		if len(gaps) == 0 {
+			continue
+		}
+		if !strings.Contains(text, heading) {
+			// Show what the doc claims, so the fix is obvious.
+			claimed := "no heading at all"
+			if idx := strings.Index(text, "### "+backend+" — "); idx >= 0 {
+				end := strings.Index(text[idx:], "\n")
+				claimed = text[idx : idx+end]
+			}
+			t.Errorf("the matrix has %d gaps for %s but the doc says %q",
+				len(gaps), backend, claimed)
+		}
+		// Every gap must actually be listed, or the count is right by accident.
+		for _, gap := range gaps {
+			bullet := "- **" + gap + "** —"
+			section := text[strings.Index(text, "### "+backend+" — "):]
+			if next := strings.Index(section[3:], "\n### "); next >= 0 {
+				section = section[:next+3]
+			}
+			if !strings.Contains(section, bullet) {
+				t.Errorf("%s's gap %q is missing from the doc's list", backend, gap)
+			}
 		}
 	}
 }

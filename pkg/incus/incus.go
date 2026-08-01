@@ -182,6 +182,18 @@ func (c Client) Exists(name string) bool {
 func Start(name string) error {
 	return NewClient("").Start(name)
 }
+
+// Restart uses Incus's own restart, not a stop followed by a start. The
+// difference is the guest's shutdown ordering: `incus restart` sends the
+// stop signal and waits, where two separate calls can start the instance again
+// before it has finished going down.
+func (c Client) Restart(name string) error {
+	if out, err := defaultRunner.Run("incus", "restart", c.target(name)); err != nil {
+		return fmt.Errorf("incus restart %s: %s (%w)", name, string(out), err)
+	}
+	return nil
+}
+
 func (c Client) Start(name string) error {
 	if out, err := defaultRunner.Run("incus", "start", c.target(name)); err != nil {
 		if strings.Contains(string(out), "already running") {

@@ -125,8 +125,8 @@ var Matrix = map[string]map[string]Entry{
 	"restart": {
 		"kubevirt": {Shipped, "virtctl restart"},
 		"qemu":     {Shipped, "stop then start, cmd/ops.go"},
-		"incus":    {Possible, "incus restart — Corral stops then starts instead"},
-		"libvirt":  {Possible, "virsh reboot — Corral stops then starts instead"},
+		"incus":    {Shipped, "incus restart — the backend's own, so the guest's shutdown ordering survives"},
+		"libvirt":  {Shipped, "virsh reboot — an ACPI request; a guest that ignores it stays up, which is honest"},
 		"proxmox":  {Shipped, "POST …/status/reboot — a real reboot, not stop-then-start"},
 	},
 	"pause": {
@@ -235,11 +235,11 @@ var Matrix = map[string]map[string]Entry{
 		"proxmox":  {Shipped, "PUT …/config hostpciN"},
 	},
 	"export": {
-		"kubevirt": {Shipped, "VirtualMachineExport, qcow2 or raw.gz"},
-		"qemu":     {Possible, "copy or convert the disk while stopped"},
-		"incus":    {Possible, "incus export"},
-		"libvirt":  {Possible, "copy or convert the backing volume"},
-		"proxmox":  {Shipped, "vzdump in snapshot mode; downloading the archive is a separate step by design"},
+		"kubevirt": {Shipped, "virtctl vmexport, qcow2 or raw.gz — pkg/export.KubeVirt"},
+		"qemu":     {Shipped, "qemu-img convert while stopped — pkg/export.QEMU"},
+		"incus":    {Shipped, "incus export; qcow2 pulls the boot disk out of the archive — pkg/export.Incus"},
+		"libvirt":  {Shipped, "qemu-img convert of the backing volume — pkg/export.Libvirt"},
+		"proxmox":  {Possible, "vzdump in snapshot mode; pkg/export has no PVE adapter, so a PVE guest cannot yet be a move source"},
 	},
 	"events": {
 		"kubevirt": {Shipped, "kubectl get events for the VM and its launcher pod"},

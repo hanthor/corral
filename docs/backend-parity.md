@@ -31,7 +31,7 @@ backend cannot, or it is meaningless there.
 | Create | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Start | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stop | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Restart | ✅ | ✅ | 🔨 | 🔨 | ✅ |
+| Restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Pause / resume | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Delete | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SSH | ✅ | ✅ | ✅ | 🔨 | ✅ |
@@ -47,7 +47,7 @@ backend cannot, or it is meaningless there.
 | Add / remove disks | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Expand disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | GPU passthrough | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
-| Export / backup disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Export / backup disk | ✅ | ✅ | ✅ | ✅ | 🔨 |
 | Events | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Tags | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Published ports | ✅ | ✅ | 🔨 | — | — |
@@ -143,7 +143,7 @@ bridge is not, so the capability flags say no and the matrix says why.
 
 ## Gaps by backend
 
-### qemu — 13 gaps
+### qemu — 12 gaps
 
 - **pause** — QMP stop/cont on the unit's QMP socket, which pkg/qemu already creates
 - **tty** — the serial socket the generated unit already defines
@@ -155,13 +155,11 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — qemu-img create plus a unit edit
 - **expand** — qemu-img resize while stopped
 - **gpu** — vfio-pci in the generated unit
-- **export** — copy or convert the disk while stopped
 - **events** — journalctl --user for the unit
 - **tags** — the local registry, which already persists per-VM state
 
-### incus — 16 gaps
+### incus — 14 gaps
 
-- **restart** — incus restart — Corral stops then starts instead
 - **pause** — incus pause / incus start
 - **vnc** — incus console --type=vga for Incus VMs; the web vncBridge handles local, libvirt, and cluster namespaces only
 - **rdp** — same, via the instance address
@@ -173,14 +171,12 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — incus storage volume attach
 - **expand** — incus config device set … size
 - **gpu** — incus config device add … gpu
-- **export** — incus export
 - **events** — incus monitor, or the events websocket
 - **tags** — instance config user.corral.tag.<name>
 - **ports** — incus config device add … proxy
 
-### libvirt — 16 gaps
+### libvirt — 14 gaps
 
-- **restart** — virsh reboot — Corral stops then starts instead
 - **pause** — virsh suspend / virsh resume
 - **ssh** — the domain's address via the guest agent or DHCP leases, then plain ssh — pkg/libvirt has SSH but the TUI does not offer it because the capability table omits it
 - **tty** — virsh console
@@ -193,16 +189,16 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — virsh attach-disk / detach-disk
 - **expand** — virsh blockresize
 - **gpu** — hostdev in the domain XML
-- **export** — copy or convert the backing volume
 - **events** — virsh event / domain lifecycle events
 - **tags** — domain metadata
 
-### proxmox — 4 gaps
+### proxmox — 5 gaps
 
 - **tty** — termproxy tickets are implemented (pkg/proxmoxbe.TermTicket); the web websocket bridge is not wired yet
 - **vnc** — vncproxy tickets are implemented (pkg/proxmoxbe.VNCTicket); the web websocket bridge is not wired yet
 - **rdp** — same, via the guest address
 - **containers** — pkg/proxmoxbe.Containers lists them and Create makes them; pkg/ct does not yet surface a non-Kubernetes CT
+- **export** — vzdump in snapshot mode; pkg/export has no PVE adapter, so a PVE guest cannot yet be a move source
 
 ## Testing parity
 

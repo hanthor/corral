@@ -63,7 +63,13 @@ func (c Client) List() ([]types.VM, error) {
 }
 func (c Client) Exists(name string) bool { _, err := c.run("dominfo", name); return err == nil }
 func (c Client) Start(name string) error { _, err := c.run("start", name); return err }
-func (c Client) Stop(name string) error  { _, err := c.run("shutdown", name); return err }
+
+// Restart is `virsh reboot`: an ACPI reboot request to the guest, which is
+// libvirt's own mechanism and preserves the guest's shutdown ordering. It needs
+// the guest to be listening for ACPI — a guest that ignores it stays up, which
+// is the honest outcome and not something to paper over with a destroy.
+func (c Client) Restart(name string) error { _, err := c.run("reboot", name); return err }
+func (c Client) Stop(name string) error    { _, err := c.run("shutdown", name); return err }
 func (c Client) Delete(name string) error {
 	_, _ = c.run("destroy", name)
 	_, err := c.run("undefine", name, "--remove-all-storage", "--nvram")

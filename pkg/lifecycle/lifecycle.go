@@ -11,10 +11,7 @@ package lifecycle
 import (
 	"fmt"
 
-	"github.com/tuna-os/corral/pkg/incus"
-	"github.com/tuna-os/corral/pkg/kubevirt"
-	"github.com/tuna-os/corral/pkg/libvirt"
-	"github.com/tuna-os/corral/pkg/qemu"
+	"github.com/tuna-os/corral/pkg/backend"
 	"github.com/tuna-os/corral/pkg/types"
 )
 
@@ -30,6 +27,12 @@ const (
 // Do performs the action on the referenced instance. The reference carries the
 // context, so an instance name that exists in several contexts is never
 // ambiguous.
+//
+// The per-backend switch this package was created to hold now lives in
+// pkg/backend's operation contract, which every backend registers with — so
+// this dispatches through Power rather than keeping a second copy that could
+// drift. A backend gained by that contract (Proxmox) is a backend the scheduler
+// can power without a change here, which is the point of the contract.
 func Do(ref types.InstanceRef, action Action) error {
 	if err := ref.Validate(); err != nil {
 		return err
@@ -39,51 +42,30 @@ func Do(ref types.InstanceRef, action Action) error {
 	default:
 		return fmt.Errorf("unknown lifecycle action %q", action)
 	}
-
-	switch ref.Backend {
-	case "kubevirt":
-		c := kubevirt.NewClientForContext(ref.Namespace, ref.Context)
-		if action == Start {
-			return c.StartVM(ref.Name)
-		}
-		return c.StopVM(ref.Name)
-
-	case "qemu":
-		if ref.Context != "" {
-			return fmt.Errorf("the local qemu backend has no contexts, got %q", ref.Context)
-		}
-		if action == Start {
-			return qemu.Start(ref.Name)
-		}
-		return qemu.Stop(ref.Name)
-
-	case "incus":
-		remote := ref.Context
-		if remote == "" {
-			remote = "local"
-		}
-		c := incus.NewClient(remote)
-		if action == Start {
-			return c.Start(ref.Name)
-		}
-		return c.Stop(ref.Name)
-
-	case "libvirt":
-		c := libvirt.NewClient(ref.Context)
-		if action == Start {
-			return c.Start(ref.Name)
-		}
-		return c.Stop(ref.Name)
-
-	default:
-		return fmt.Errorf("no lifecycle adapter for backend %q", ref.Backend)
+	if ref.Backend == "qemu" && ref.Context != "" {
+		// Worth catching here rather than letting the adapter ignore it: a
+		// scheduler pointed at "qemu in context prod" is misconfigured, and
+		// silently powering the local VM of that name is the wrong recovery.
+		return fmt.Errorf("the local qemu backend has no contexts, got %q", ref.Context)
 	}
+
+	adapter, err := backend.For(ref)
+	if err != nil {
+		return err
+	}
+	power, ok := adapter.(backend.Power)
+	if !ok {
+		return fmt.Errorf("the %s backend cannot be powered on and off", ref.Backend)
+	}
+	if action == Start {
+		return power.Start(ref.Name)
+	}
+	return power.Stop(ref.Name)
 }
 
 // Supported reports whether an instance's backend can be powered on and off
-// through Do. It reads the capability table rather than duplicating the switch
-// above, so the two cannot drift.
-func Supported(backend string) bool {
-	caps := types.CapabilitiesForBackend(backend)
-	return caps.Start && caps.Stop
+// through Do — asked of the contract itself, so it cannot claim more than Do
+// can deliver.
+func Supported(name string) bool {
+	return backend.Provides(name, "start") && backend.Provides(name, "stop")
 }

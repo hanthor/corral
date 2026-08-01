@@ -108,11 +108,6 @@ type Event struct {
 	Message string
 }
 
-// Exporter produces a downloadable copy of a guest's disk.
-type Exporter interface {
-	Export(name, destination string) (string, error)
-}
-
 // Addresser reports the guest's own network address, which is what SSH and the
 // RDP probe need. It is not a Family: how a backend reaches a guest differs too
 // much to gate one matrix row on (KubeVirt tunnels through virtctl and needs no
@@ -190,7 +185,6 @@ var Families = []Family{
 	{"Templater", []string{"template"}, func(a Adapter) bool { _, ok := a.(Templater); return ok }},
 	{"Tagger", []string{"tags"}, func(a Adapter) bool { _, ok := a.(Tagger); return ok }},
 	{"Observer", []string{"metrics", "events"}, func(a Adapter) bool { _, ok := a.(Observer); return ok }},
-	{"Exporter", []string{"export"}, func(a Adapter) bool { _, ok := a.(Exporter); return ok }},
 }
 
 // Implemented returns the families a backend's adapter satisfies. It builds a
