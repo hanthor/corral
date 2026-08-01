@@ -118,7 +118,8 @@ func IngestRefusal(backend string) string {
 		// leaves the guest without the agent and config drive. The result would
 		// look like it worked and behave unlike every other Incus instance.
 		return "an Incus VM boots from Incus's own image store and has no supported way to adopt " +
-			"a foreign disk; Incus can be a move source but not a destination (see ADR-0010)"
+			"a foreign disk; Incus is a move source (its export adapter produces a qcow2 of the " +
+			"boot disk) but not a destination (see ADR-0010)"
 	case "kubevirt":
 		return "the CDI upload path is not wired into move yet (ADR-0010's first slice covers " +
 			"qemu and libvirt destinations); use `corral create --import` meanwhile"

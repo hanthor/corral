@@ -1,6 +1,7 @@
 package export
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"os"
@@ -65,20 +66,22 @@ func TestFor_EveryImplementedBackend(t *testing.T) {
 	}
 }
 
-// Incus produces an instance archive, not a disk image. Labelling it qcow2
-// would disappoint whoever tries to boot the result, so the formats are
-// deliberately disjoint and a mismatch is refused with the alternatives.
-func TestFormats_IncusIsNotADiskImage(t *testing.T) {
+// An Incus instance archive is not a disk image, so the native format stays
+// incus-tar: it is the right artifact for a backup, carrying the configuration
+// and every volume. qcow2 is offered second, because without it an Incus VM
+// cannot be moved to another backend at all — but it is a narrower thing (the
+// boot disk only), and which one a caller gets should not be an accident.
+func TestFormats_IncusOffersTheArchiveFirstAndADiskSecond(t *testing.T) {
 	formats := Formats("incus")
-	if len(formats) != 1 || formats[0] != IncusTar {
-		t.Fatalf("incus formats = %v, want just %v", formats, IncusTar)
+	if len(formats) != 2 || formats[0] != IncusTar || formats[1] != Qcow2 {
+		t.Fatalf("incus formats = %v, want [%v %v]", formats, IncusTar, Qcow2)
 	}
-	_, err := pickFormat("incus", Qcow2, formats)
-	if err == nil {
-		t.Fatal("incus accepted a qcow2 request")
+	native, err := pickFormat("incus", "", formats)
+	if err != nil || native != IncusTar {
+		t.Errorf("an unspecified format should stay the archive, got %q (%v)", native, err)
 	}
-	if !strings.Contains(err.Error(), string(IncusTar)) {
-		t.Errorf("refusal does not name what is available: %v", err)
+	if _, err := pickFormat("incus", RawGz, formats); err == nil {
+		t.Error("incus accepted raw.gz, which it cannot produce")
 	}
 }
 
@@ -303,5 +306,170 @@ func TestIncus_ExportsToTheNamedRemote(t *testing.T) {
 	}
 	if result.Bytes == 0 {
 		t.Error("result reports no size")
+	}
+}
+
+// ── Incus as a disk source (ADR-0010) ─────────────────────────────
+
+// writeTar builds an instance archive holding the named members.
+func writeTar(t *testing.T, path string, members map[string]string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := tar.NewWriter(f)
+	for name, body := range members {
+		if err := w.WriteHeader(&tar.Header{
+			Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractInstanceDisk_PullsTheVMImage(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "inst.tar")
+	writeTar(t, archive, map[string]string{
+		"backup/index.yaml":          "name: dev\n",
+		"backup/virtual-machine.img": "DISKBYTES",
+	})
+
+	dest := filepath.Join(dir, "disk.img")
+	if err := extractInstanceDisk(archive, dest); err != nil {
+		t.Fatalf("extractInstanceDisk: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "DISKBYTES" {
+		t.Fatalf("extracted %q, want the disk's contents", got)
+	}
+}
+
+// Incus renamed this member between versions; matching on the basename means a
+// third spelling is a one-line change rather than a silent failure.
+func TestExtractInstanceDisk_AcceptsTheOlderName(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "inst.tar")
+	writeTar(t, archive, map[string]string{"backup/root.img": "OLD"})
+
+	dest := filepath.Join(dir, "disk.img")
+	if err := extractInstanceDisk(archive, dest); err != nil {
+		t.Fatalf("extractInstanceDisk: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "OLD" {
+		t.Fatalf("extracted %q", got)
+	}
+}
+
+// A container archive has no disk, and saying "this is a container" is the
+// difference between an actionable message and a baffling one.
+func TestExtractInstanceDisk_ExplainsAContainer(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "ct.tar")
+	writeTar(t, archive, map[string]string{
+		"backup/index.yaml":                    "name: ct\n",
+		"backup/container/rootfs/etc/hostname": "ct\n",
+	})
+
+	err := extractInstanceDisk(archive, filepath.Join(dir, "disk.img"))
+	var u *Unsupported
+	if !errors.As(err, &u) {
+		t.Fatalf("want a typed refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(u.Reason, "container") {
+		t.Errorf("refusal does not name the cause: %q", u.Reason)
+	}
+	if u.Remedy == "" {
+		t.Error("refusal offers no way forward")
+	}
+}
+
+func TestIncus_ExportsAQcow2Disk(t *testing.T) {
+	fake := withFake(t)
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dev.qcow2")
+	archive := dest + ".tar"
+
+	// The fake runner does not write files, so the archive `incus export` would
+	// have produced and the qcow2 `qemu-img` would have written are staged here.
+	writeTar(t, archive, map[string]string{"backup/virtual-machine.img": "RAWDISK"})
+	if err := os.WriteFile(dest, []byte("qcow2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake.AddPrefixResponse("incus export", "", nil)
+	fake.AddPrefixResponse("incus list", "[]", nil)
+	fake.AddPrefixResponse("/fake/bin/qemu-img info", `{"virtual-size":42}`, nil)
+	fake.AddPrefixResponse("/fake/bin/qemu-img convert", "", nil)
+
+	ref := types.InstanceRef{Backend: "incus", Context: "lab", Name: "dev"}
+	result, err := (Incus{}).Export(context.Background(),
+		Request{Ref: ref, Dest: dest, Format: Qcow2}, nil)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if result.Format != Qcow2 {
+		t.Errorf("format = %q, want qcow2", result.Format)
+	}
+
+	// The scratch archive and the intermediate raw disk are both gigabytes and
+	// both must be gone: a move that fills /tmp is its own outage.
+	for _, leftover := range []string{archive, dest + ".img"} {
+		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+			t.Errorf("%s was left behind", leftover)
+		}
+	}
+
+	// The extracted disk is what gets converted, not the archive.
+	var converted bool
+	for _, call := range fake.Calls() {
+		joined := strings.Join(call.Args, " ")
+		if strings.Contains(joined, "convert") {
+			converted = true
+			if !strings.Contains(joined, dest+".img") {
+				t.Errorf("converted the wrong file: %s", joined)
+			}
+		}
+	}
+	if !converted {
+		t.Error("no conversion was attempted")
+	}
+}
+
+// Compression is skipped on the scratch archive deliberately — gzipping several
+// gigabytes only to read them back a second later is pure cost.
+func TestIncus_DiskExportSkipsArchiveCompression(t *testing.T) {
+	fake := withFake(t)
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dev.qcow2")
+
+	fake.AddPrefixResponse("incus list", "[]", nil)
+	fake.AddPrefixResponse("incus export", "", nil)
+	_, _ = (Incus{}).Export(context.Background(),
+		Request{Ref: types.InstanceRef{Backend: "incus", Name: "dev"}, Dest: dest, Format: Qcow2}, nil)
+
+	var found bool
+	for _, call := range fake.Calls() {
+		if call.Name != "incus" || len(call.Args) == 0 || call.Args[0] != "export" {
+			continue
+		}
+		found = true
+		joined := strings.Join(call.Args, " ")
+		if !strings.Contains(joined, "--compression=none") {
+			t.Errorf("scratch archive was compressed: %s", joined)
+		}
+	}
+	if !found {
+		t.Fatal("no incus export was attempted")
 	}
 }

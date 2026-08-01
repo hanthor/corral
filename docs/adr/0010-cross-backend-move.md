@@ -177,7 +177,7 @@ above, and the gap is enforced by refusals rather than left to discovery:
 | **qemu** | — | **yes** | no | no | no |
 | **libvirt** | **yes** | — | no | no | no |
 | **proxmox** | no | no | no | — | no |
-| **incus (VM)** | no | no | no | no | — |
+| **incus (VM)** | **yes** | **yes** | no | no | — |
 
 Three things narrow it beyond what the ADR anticipated, each with a refusal that
 names the reason:
@@ -188,12 +188,16 @@ names the reason:
   disk land the same way. KubeVirt (CDI upload) and Proxmox (the three-way
   storage resolution below) are not implemented; `backend.IngestRefusal` says so
   per backend.
-- **Incus cannot be a source either, yet.** The ADR expected it to be a fine
-  source, and it would be — but `pkg/export`'s Incus adapter produces
-  `incus-tar`, an instance archive restorable only with `incus import`, not a
-  disk another backend can boot. The move refuses with that reason rather than
-  handing a tarball to `qemu-img`. Giving the Incus export adapter a `qcow2`
-  path would open this cell with no other change.
+- **Incus is a source, not a destination.** `pkg/export`'s Incus adapter grew a
+  `qcow2` format for this: it exports the instance archive to scratch, pulls
+  `backup/virtual-machine.img` out of it, and converts. Going through the
+  archive rather than the storage pool is deliberate — the pool layout differs
+  per driver, usually needs root, and is not reachable at all for a remote
+  instance, while `incus export` works the same way everywhere and over the
+  network. The archive stays the *native* format, because it is the right
+  artifact for a backup (configuration and every volume) where the qcow2 is only
+  the boot disk. A container archive has no such member, and the refusal says
+  so in those words rather than failing later inside `qemu-img`.
 - **Only qcow2 is ingested.** `raw.gz` is a disk, but a compressed one, and the
   ingest path hands the file to `qemu-img convert`, which does not read gzip.
   Every backend that can export offers qcow2, so nothing is lost by naming the

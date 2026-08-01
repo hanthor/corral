@@ -399,7 +399,7 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		if refusal == "" {
 			t.Errorf("%s cannot ingest and gives no reason", backend)
 		}
-		if backend == "incus" && !strings.Contains(refusal, "source but not a destination") {
+		if backend == "incus" && !strings.Contains(refusal, "but not a destination") {
 			t.Errorf("the Incus refusal should say it can still be a source: %q", refusal)
 		}
 	}

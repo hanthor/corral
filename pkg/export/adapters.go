@@ -1,9 +1,11 @@
 package export
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,7 +258,14 @@ func isRemoteURI(uri string) bool {
 
 type Incus struct{}
 
-func (Incus) Formats() []Format { return []Format{IncusTar} }
+// Formats: the native archive first, then qcow2 for a VM.
+//
+// qcow2 is what makes an Incus VM movable to another backend (ADR-0010) — an
+// instance tarball restores only into Incus, so without this the whole Incus
+// row of the move table is closed. It is second, not first, because the
+// tarball is the right artifact for a backup: it carries the configuration and
+// every volume, and the qcow2 carries only the boot disk.
+func (Incus) Formats() []Format { return []Format{IncusTar, Qcow2} }
 
 func (i Incus) Export(ctx context.Context, req Request, progress ProgressFunc) (Result, error) {
 	format, err := pickFormat("incus", req.Format, i.Formats())
@@ -281,12 +290,111 @@ func (i Incus) Export(ctx context.Context, req Request, progress ProgressFunc) (
 		consistency = snapshot.Crash
 	}
 
+	if format == Qcow2 {
+		return i.exportDisk(ctx, req, remote, consistency, progress)
+	}
+
 	progress.report("exporting instance", 0, 0)
 	out, err := runner.Run("incus", "export", remote+":"+req.Ref.Name, req.Dest, "--instance-only")
 	if err != nil {
 		return Result{}, fmt.Errorf("incus export: %s", commandError(out, err))
 	}
 	return finish(req.Dest, format, consistency)
+}
+
+// exportDisk pulls the VM's boot disk out of an instance archive and converts
+// it to qcow2.
+//
+// Going through the archive rather than reaching into the storage pool is
+// deliberate: the pool layout differs per driver (zfs, btrfs, dir, lvm), often
+// needs root, and is not reachable at all for a remote instance. `incus export`
+// works the same way everywhere and over the network, at the cost of writing
+// the archive to scratch first. The caller's destination directory is where
+// that lands, so a caller that has checked for space has checked for this too.
+func (i Incus) exportDisk(ctx context.Context, req Request, remote string, consistency snapshot.Consistency, progress ProgressFunc) (Result, error) {
+	archive := req.Dest + ".tar"
+	defer os.Remove(archive)
+
+	progress.report("exporting instance", 0, 0)
+	// --compression=none because we immediately read the archive back: gzipping
+	// several gigabytes only to gunzip them a second later is pure cost.
+	out, err := runner.Run("incus", "export", remote+":"+req.Ref.Name, archive,
+		"--instance-only", "--compression=none")
+	if err != nil {
+		return Result{}, fmt.Errorf("incus export: %s", commandError(out, err))
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+
+	progress.report("extracting disk", 0, 0)
+	raw := req.Dest + ".img"
+	defer os.Remove(raw)
+	if err := extractInstanceDisk(archive, raw); err != nil {
+		return Result{}, err
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+
+	progress.report("converting disk", 0, virtualSize(raw))
+	if out, err := runner.Run(qemuImg(), "convert", "-O", "qcow2", "-c", raw, req.Dest); err != nil {
+		return Result{}, fmt.Errorf("qemu-img convert: %s", commandError(out, err))
+	}
+	return finish(req.Dest, Qcow2, consistency)
+}
+
+// instanceDiskPaths are where Incus puts a VM's boot disk inside an instance
+// archive. Both spellings exist across versions, and matching on the basename
+// keeps this working if the prefix moves again.
+var instanceDiskNames = []string{"virtual-machine.img", "root.img"}
+
+// extractInstanceDisk copies the VM disk out of an instance archive.
+//
+// A container archive has no such member, and that is the error worth getting
+// right: "this is a container, and a container has no disk image" is actionable,
+// where a generic "not found in tar" is not.
+func extractInstanceDisk(archive, dest string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return fmt.Errorf("reading the exported archive: %w", err)
+	}
+	defer f.Close()
+
+	reader := tar.NewReader(f)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading the exported archive: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg || !containsString(instanceDiskNames, filepath.Base(header.Name)) {
+			continue
+		}
+		disk, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		defer disk.Close()
+		if _, err := io.Copy(disk, reader); err != nil {
+			return fmt.Errorf("extracting %s: %w", header.Name, err)
+		}
+		return nil
+	}
+	return unsupported("incus",
+		"the exported archive holds no VM disk image, which means this instance is a container",
+		"a container is a filesystem, not a disk; export it as incus-tar, or rebuild it as a VM")
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func (Incus) running(remote, name string) bool {

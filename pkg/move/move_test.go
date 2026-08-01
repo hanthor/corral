@@ -48,7 +48,7 @@ func newStub(t *testing.T) *stub {
 			"kubevirt": {export.RawGz, export.Qcow2},
 			"qemu":     {export.Qcow2, export.RawGz},
 			"libvirt":  {export.Qcow2, export.RawGz},
-			"incus":    {export.IncusTar},
+			"incus":    {export.IncusTar, export.Qcow2},
 		},
 		free: 1 << 40,
 	}
@@ -227,8 +227,26 @@ func TestPreflightRefusesIncusAsADestination(t *testing.T) {
 	}
 }
 
-func TestPreflightRefusesIncusAsASourceBecauseItsExportIsNotADisk(t *testing.T) {
+// Incus is a source now that its export adapter can produce a qcow2 of the
+// boot disk. It is still not a destination — those are different problems.
+func TestPreflightAllowsIncusAsASource(t *testing.T) {
 	newStub(t)
+	src := sourceVM()
+	src.VM.Backend = "incus"
+	plan := Preflight(src, to("qemu"))
+	if !plan.OK() {
+		t.Fatalf("incus → qemu should be allowed:\n%s", refusalText(plan))
+	}
+	if plan.Format != export.Qcow2 {
+		t.Errorf("format = %q, want qcow2 — the archive is not bootable elsewhere", plan.Format)
+	}
+}
+
+// A backend whose only artifact is its own archive still cannot be a source,
+// and the refusal has to say why rather than failing at qemu-img.
+func TestPreflightRefusesASourceWhoseExportIsNotADisk(t *testing.T) {
+	s := newStub(t)
+	s.formats["incus"] = []export.Format{export.IncusTar}
 	src := sourceVM()
 	src.VM.Backend = "incus"
 	mustRefuse(t, Preflight(src, to("qemu")), "not a disk image")
@@ -610,7 +628,7 @@ func TestPairsMatchTheADR(t *testing.T) {
 	acceptsUEFI, formatsFor = destinationAcceptsUEFI, export.Formats
 	_ = s
 
-	sources := []string{"kubevirt", "qemu", "libvirt"}
+	sources := []string{"kubevirt", "qemu", "libvirt", "incus"}
 	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": false, "proxmox": false, "incus": false}
 
 	for _, from := range sources {
