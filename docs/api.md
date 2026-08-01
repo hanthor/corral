@@ -548,7 +548,8 @@ kept unless `deleteSource` is set.
 Served from a cached snapshot refreshed on a background timer, so a scrape never
 fans out to the backends. `corral_collection_age_seconds` is published for that
 reason: without it, a frozen collector is indistinguishable from a stable fleet.
-The `pool` label is the one that spans backends —
+The `context` label is the configured context's name, so the instance series
+and `corral_backend_up` join. The `pool` label is the one that spans backends —
 `sum by (pool) (corral_instance_running)` answers "is my application stack up"
 across a KubeVirt cluster and a Proxmox host at once. See ADR-0011 for the full
 series list and label rationale.
