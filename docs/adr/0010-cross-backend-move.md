@@ -238,12 +238,23 @@ The instance's folder membership follows it to the destination, since a move
 that silently drops a VM out of the grouping an operator organised it into is a
 worse surprise than the IP change.
 
+- **Firmware and guest OS are asked of the source, not assumed.** `move.Inspect`
+  goes through a `backend.Inspector` family — KubeVirt's
+  `firmware.bootloader.efi`, libvirt's `firmware='efi'` or an OVMF `<loader>`,
+  PVE's `bios: ovmf` and `ostype`. An Incus VM always answers UEFI, because
+  Incus boots its VMs under OVMF with no BIOS option: that is the one backend
+  where the fact belongs to the backend rather than the instance, and it means
+  an Incus VM cannot move to qemu until qemu's generated unit grows a firmware
+  path. qemu is also the one backend that cannot be *asked* — its unit records
+  no firmware — so a qemu source inspects to unknown, which downgrades the
+  refusal to the unknown-OS warning rather than asserting BIOS.
+
 Also deviating from the sketch above: `Preflight` takes the `types.VM` the
 caller's inventory already holds rather than an `InstanceRef`, which keeps
 `pkg/move` out of the listing business — the same shape `pkg/web`'s folder
-actions use. Firmware and guest OS type ride alongside it in `move.Source`,
-because no listing carries them; until each backend reports them, a caller that
-leaves them unset gets the unknown-OS warning rather than a false assurance.
+actions use. Firmware and guest OS ride alongside it in `move.Source`, filled
+by `Inspect` rather than by the listing: a config read per instance is the right
+price at preflight and the wrong one on the dashboard's five-second poll.
 
 ## Consequences
 

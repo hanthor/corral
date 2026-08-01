@@ -77,7 +77,7 @@ func planFor(r *http.Request, body moveRequest) (move.Plan, types.VM, error) {
 	if err != nil {
 		return move.Plan{}, types.VM{}, err
 	}
-	plan := move.Preflight(move.Source{VM: vm}, move.Target{
+	plan := move.Preflight(move.Inspect(vm, false), move.Target{
 		Backend:      body.ToBackend,
 		Context:      body.ToContext,
 		Namespace:    body.ToNamespace,

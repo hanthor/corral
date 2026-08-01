@@ -32,6 +32,10 @@ func (c Client) run(args ...string) ([]byte, error) {
 	return runner.Run("virsh", append([]string{"-c", c.URI}, args...)...)
 }
 
+// DumpXML returns a domain's definition, which is where libvirt records the
+// facts no listing carries — firmware above all.
+func (c Client) DumpXML(name string) ([]byte, error) { return c.run("dumpxml", name) }
+
 func (c Client) List() ([]types.VM, error) {
 	out, err := c.run("list", "--all", "--name")
 	if err != nil {

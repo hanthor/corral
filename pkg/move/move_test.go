@@ -646,3 +646,73 @@ func TestPairsMatchTheADR(t *testing.T) {
 		}
 	}
 }
+
+// ── inspection (ADR-0010's firmware refusal) ──────────────────────
+
+func stubInspect(t *testing.T, info backend.GuestInfo) {
+	t.Helper()
+	previous := inspectGuest
+	inspectGuest = func(types.InstanceRef) backend.GuestInfo { return info }
+	t.Cleanup(func() { inspectGuest = previous })
+}
+
+// The hole this closes: every caller used to build a Source with UEFI unset,
+// which is indistinguishable from "this guest is BIOS". A UEFI guest moved to
+// qemu was accepted and produced a VM that boots to a blank screen.
+func TestInspectCarriesFirmwareIntoTheRefusal(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{UEFI: true})
+
+	src := Inspect(sourceVM().VM, false)
+	if !src.UEFI {
+		t.Fatal("Inspect did not carry the source's firmware")
+	}
+	mustRefuse(t, Preflight(src, to("qemu")), "boots via UEFI")
+}
+
+func TestInspectCarriesTheGuestOSIntoTheWarning(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{OSType: "windows"})
+
+	src := Inspect(sourceVM().VM, false)
+	if !strings.Contains(warningText(Preflight(src, to("qemu"))), "virtio drivers") {
+		t.Fatal("a Windows source should reach the virtio warning through Inspect")
+	}
+}
+
+// A backend that cannot answer must leave both unknown, which downgrades to the
+// warning rather than asserting the guest is BIOS.
+func TestInspectTreatsAnUnknownBackendAsUnknownNotAsBIOS(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{})
+
+	src := Inspect(sourceVM().VM, false)
+	plan := Preflight(src, to("qemu"))
+	if !plan.OK() {
+		t.Fatalf("an unknown firmware must not refuse the move:\n%s", refusalText(plan))
+	}
+	if !strings.Contains(warningText(plan), "did not record a guest OS type") {
+		t.Errorf("and it should warn instead:\n%s", warningText(plan))
+	}
+}
+
+func TestInspectPassesTheContainerFlagThrough(t *testing.T) {
+	newStub(t)
+	stubInspect(t, backend.GuestInfo{})
+	mustRefuse(t, Preflight(Inspect(sourceVM().VM, true), to("qemu")), "containers cannot be moved")
+}
+
+// The seam's default must be the real inspector, or every caller silently gets
+// "unknown" and the firmware refusal never fires in production while every test
+// still passes. pkg/backend covers what each adapter reports.
+func TestInspectSeamDefaultsToTheRealInspector(t *testing.T) {
+	got := inspectGuest(types.InstanceRef{Backend: "vmware", Name: "x"})
+	if got != (backend.GuestInfo{}) {
+		t.Fatalf("an unknown backend should inspect to the zero value, got %+v", got)
+	}
+	// A registered backend that cannot be reached must also answer "unknown"
+	// rather than erroring — Inspect has no error return for exactly that reason.
+	if got := inspectGuest(types.InstanceRef{Backend: "libvirt", Name: "nope"}); got.UEFI {
+		t.Errorf("an unreachable host must not be reported as UEFI: %+v", got)
+	}
+}

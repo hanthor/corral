@@ -71,6 +71,19 @@ type Step struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// Inspect fills in the two facts a listing does not carry by asking the
+// source's backend, and returns a Source ready for Preflight.
+//
+// Callers go through this rather than constructing a Source directly, because a
+// zero-valued UEFI field is indistinguishable from "this guest is BIOS" and
+// that is the difference between refusing a doomed move and performing one.
+// A backend that cannot answer leaves both unknown, which downgrades the
+// firmware refusal to the unknown-OS warning rather than silently asserting.
+func Inspect(vm types.VM, container bool) Source {
+	info := inspectGuest(vm.Ref())
+	return Source{VM: vm, UEFI: info.UEFI, OSType: info.OSType, Container: container}
+}
+
 // Source is the instance being moved, as the caller's inventory already knows
 // it, plus the two facts no listing carries. ADR-0010 wrote the signature as
 // taking an InstanceRef; taking the VM instead keeps this package out of the
@@ -179,6 +192,7 @@ var (
 		return power.Delete(ref.Name)
 	}
 
+	inspectGuest = backend.Inspect
 	canIngest    = backend.CanIngest
 	ingestReason = backend.IngestRefusal
 	acceptsUEFI  = destinationAcceptsUEFI
