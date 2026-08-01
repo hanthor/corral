@@ -505,6 +505,60 @@ request returns `501` and the default raw.gz still works.
 
 ---
 
+## Pools and cross-backend move
+
+Pools are the user-defined folders of ADR-0008; paths travel in the body or the
+query string, never in the route, because a nested path contains slashes.
+
+| Method | Route | Notes |
+|---|---|---|
+| `GET` | `/api/folders` | Tree with members resolved against the live fleet, plus `unfoldered` |
+| `POST` | `/api/folders` | `{path}` — nesting with `/`, max depth 8 |
+| `DELETE` | `/api/folders?path=…` | Members are unfoldered, never deleted |
+| `POST` | `/api/folders/move` | `{from, to}` — re-parent a pool |
+| `POST` | `/api/folders/members` | `{path, ref}` — what a drag-and-drop lands on |
+| `DELETE` | `/api/folders/members?ref=…` | |
+| `POST` | `/api/folders/action` | `{path, action}` — fans out with per-member results |
+
+Moving an instance between backends (ADR-0010) is two endpoints, because the
+decision and the doing are separate. **A move stops the guest** — it is not a
+live migration, and `corral migrate` remains the live, same-backend operation.
+
+| Method | Route | Notes |
+|---|---|---|
+| `GET` | `/api/move/destinations` | Which backends can receive, and why the others cannot |
+| `POST` | `/api/move/preflight` | Returns the plan. Touches nothing — safe to call on every drag |
+| `POST` | `/api/move` | Commits, after re-running the preflight server-side |
+
+Body for both: `{ref, toBackend, toContext?, toNamespace?, name?, scratch?, deleteSource?}`.
+
+A refused preflight is a **200** — the refusals are the answer, and an error
+status would make a UI show "request failed" where it should show three reasons.
+A refused commit is a **409** carrying the same list. The source is stopped and
+kept unless `deleteSource` is set.
+
+---
+
+## Metrics
+
+| Method | Route | Notes |
+|---|---|---|
+| `GET` | `/metrics` | Prometheus text exposition. Requires `corral web --metrics` |
+
+Served from a cached snapshot refreshed on a background timer, so a scrape never
+fans out to the backends. `corral_collection_age_seconds` is published for that
+reason: without it, a frozen collector is indistinguishable from a stable fleet.
+The `pool` label is the one that spans backends —
+`sum by (pool) (corral_instance_running)` answers "is my application stack up"
+across a KubeVirt cluster and a Proxmox host at once. See ADR-0011 for the full
+series list and label rationale.
+
+Without `--metrics` the endpoint still answers 200 with
+`corral_collection_success 0`: a scraper that receives a 503 records nothing,
+and "up but not collecting" is the state worth alerting on.
+
+---
+
 ## Static assets
 
 The embedded SPA is served at the root:

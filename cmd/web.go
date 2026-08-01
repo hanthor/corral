@@ -50,6 +50,8 @@ you can explore the dashboard — or develop on it — with no cluster at all.`,
 func init() {
 	rootCmd.AddCommand(webCmd)
 	webCmd.Flags().StringVar(&webAddr, "addr", "127.0.0.1:8006", "Listen address")
+	webCmd.Flags().BoolVar(&web.MetricsEnabled, "metrics", false,
+		"Serve Prometheus metrics on /metrics (starts a background fleet collector)")
 	webCmd.Flags().StringVar(&webAccent, "accent", "", "Accent colour (CSS hex, e.g. #3b82f6)")
 	webCmd.Flags().StringVar(&webBrandTitle, "brand-title", "", "Brand title shown in the header")
 	webCmd.Flags().StringVar(&webBrandEmoji, "brand-emoji", "", "Emoji shown left of the brand title")

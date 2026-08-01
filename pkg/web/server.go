@@ -5,6 +5,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -65,6 +66,10 @@ func Serve(addr string) error {
 		return err
 	}
 	startMetricSampler()
+	if MetricsEnabled {
+		StartMetrics(context.Background())
+		fmt.Fprintln(os.Stderr, "Prometheus metrics on /metrics")
+	}
 	fmt.Fprintf(os.Stderr, "Corral web UI listening on http://%s\n", addr)
 	return http.ListenAndServe(addr, mux)
 }
@@ -94,6 +99,11 @@ func newMux() (http.Handler, error) {
 	// corral REST API so ecosystem tools can manage VMs through the
 	// same corral web deployment.
 	mux.Handle("/api2/json/", proxmox.NewHandler(kubevirt.DefaultNamespace))
+
+	// /metrics sits outside /api because that is where scrapers look. It is
+	// behind the same admin gate as everything else, so a tailnet-gated Corral
+	// has a tailnet-gated metrics endpoint (ADR-0011).
+	mux.HandleFunc("GET /metrics", handleMetricsExposition)
 
 	mux.HandleFunc("GET /api/whoami", handleWhoami)
 	mux.HandleFunc("GET /api/theme", handleGetTheme)
@@ -133,6 +143,7 @@ func newMux() (http.Handler, error) {
 	mux.HandleFunc("GET /api/tasks/{id}", handleTaskStatus)
 	mux.HandleFunc("GET /api/tasklog", handleTaskLog)
 	registerFolderRoutes(mux)
+	registerMoveRoutes(mux)
 	mux.HandleFunc("GET /api/vms/{ns}/{name}", handleVMInfo)
 	mux.HandleFunc("POST /api/vms/{ns}/{name}/{action}", handleVMAction)
 	mux.HandleFunc("DELETE /api/vms/{ns}/{name}", handleDeleteVM)

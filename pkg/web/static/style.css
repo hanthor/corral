@@ -615,3 +615,51 @@ tr.ev-warn td { color: var(--yellow); }
   #vnc-screen, #tty-screen { height: 60vh; }
   .toolbar { margin-left: 0; }
 }
+
+/* ── Pool View: drag-and-drop tree (ADR-0008) and the move dialog (ADR-0010) ── */
+
+.tree-item.lvl-3 { margin-left: 48px; }
+.tree-item.lvl-4 { margin-left: 64px; }
+.tree-item[draggable="true"] { cursor: grab; }
+.tree-item.dragging { opacity: .45; }
+
+/* A live drop target is outlined rather than filled, so the row underneath
+   stays readable while the cursor is over it. */
+.tree-item.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: var(--panel-2);
+}
+/* A backend that cannot receive a move: visibly inert, with the reason on
+   hover. It is never a drop target, so it never highlights. */
+.tree-item.disabled { opacity: .45; cursor: not-allowed; }
+
+.tree-inline { margin-left: auto; display: inline-flex; gap: 3px; flex: none; }
+.btn.xs {
+  padding: 1px 6px; font-size: .72rem; line-height: 1.5;
+  min-height: 0; border-radius: 5px;
+}
+/* The per-pool bulk actions stay out of the way until the row is hovered —
+   three buttons on every folder is noise, and one of them stops everything. */
+.pool-actions { visibility: hidden; }
+.tree-item:hover .pool-actions, .tree-item:focus-within .pool-actions { visibility: visible; }
+
+.modal {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.6); padding: 20px;
+}
+.modal-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+  width: min(640px, 96vw); max-height: 86vh; overflow-y: auto;
+}
+.modal-card h2 { margin: 0 0 8px; font-size: 1.1rem; }
+.modal-card h3 { margin: 16px 0 6px; font-size: .9rem; }
+.modal-card h3.bad { color: var(--bad, #f85149); }
+.modal-card .lede { color: var(--muted); font-size: .85rem; margin: 0 0 6px; }
+.modal-card ul, .modal-card ol { margin: 0; padding-left: 20px; font-size: .85rem; }
+.modal-card li { margin-bottom: 4px; }
+.modal-card .refusals li { color: var(--bad, #f85149); }
+.modal-card .check { display: block; margin: 16px 0 0; font-size: .85rem; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }

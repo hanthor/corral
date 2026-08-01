@@ -104,6 +104,106 @@ const putRes = await fetch(`${BASE}api/theme`, {
 const updated = await putRes.json();
 check(updated.accent === '#22c55e' || updated.error, 'PUT /api/theme accepts accent change');
 
+
+// ── Pool View: drag-and-drop grouping and drag-to-move ────────────
+// The drop targets are the whole point of this view, and the two kinds must
+// behave differently: a pool drop regroups silently, a backend drop must open
+// the preflight and change nothing until it is confirmed.
+
+await page.click('#tree >> text=Pool View');
+await page.waitForTimeout(600);
+check(await page.locator('#tree >> text=Pools').count() > 0, 'Pool View renders the pools section');
+check(await page.locator('#tree >> text=Unassigned').count() > 0, 'Pool View lists unassigned instances');
+check(await page.locator('#tree >> text=Move to backend').count() > 0, 'Pool View offers backends as drop targets');
+
+// Backends that cannot receive a move are inert with the reason on hover,
+// rather than accepting a drop and refusing it afterwards.
+const incusTarget = page.locator('.tree-item.disabled', { hasText: 'incus' }).first();
+check(await incusTarget.count() > 0, 'incus is shown as an unavailable move target');
+check(
+  ((await incusTarget.getAttribute('title')) || '').length > 20,
+  'an unavailable target explains itself on hover',
+);
+const qemuTarget = page.locator('#tree .tree-item', { hasText: 'qemu' }).last();
+check(
+  !(await qemuTarget.getAttribute('class') || '').includes('disabled'),
+  'qemu is a live move target',
+);
+
+// Create a pool through the API and check the tree picks it up with its
+// bulk-action buttons — the reason pools exist.
+await fetch(`${BASE}api/folders`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ path: 'smoke/web' }),
+});
+await page.click('#tree >> text=Server View');
+await page.click('#tree >> text=Pool View');
+await page.waitForTimeout(800);
+const poolRow = page.locator('#tree .tree-item', { hasText: 'web' }).filter({ has: page.locator('.pool-actions') }).first();
+check(await poolRow.count() > 0, 'a created pool appears in the tree with bulk actions');
+
+// The gesture itself: drag an unassigned VM onto the pool row and check the
+// membership actually moved. This is the feature, not the rendering of it.
+const dragSubject = page.locator('#tree .tree-item[draggable="true"]').first();
+const draggedName = (await dragSubject.textContent()).trim().split(' ')[0];
+await dragSubject.dragTo(poolRow);
+await page.waitForTimeout(1200);
+const folders = await (await fetch(`${BASE}api/folders`)).json();
+const smokePool = (folders.folders || []).find((f) => f.path === 'smoke/web');
+check(
+  !!smokePool && (smokePool.members || []).length === 1,
+  `dragging a VM onto a pool assigns it (${draggedName} → smoke/web)`,
+);
+
+// The preflight is a read: asking for one must not change the fleet. Take the
+// ref from the fleet itself rather than spelling one out — the demo backends'
+// contexts are not this script's business.
+const fleet = await (await fetch(`${BASE}api/vms`)).json();
+const subject = fleet.find((v) => v.backend === 'kubevirt') || fleet[0];
+const before = fleet.length;
+const planRes = await fetch(`${BASE}api/move/preflight`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ref: subject.id, toBackend: 'qemu' }),
+});
+const plan = await planRes.json();
+check(planRes.status === 200, 'preflight answers 200 even when it refuses');
+check(Array.isArray(plan.steps) && plan.steps.length > 0, 'preflight returns a step-by-step plan');
+check(
+  (plan.warnings || []).some((w) => w.includes('MAC')),
+  'preflight always warns about the address change',
+);
+const after = (await (await fetch(`${BASE}api/vms`)).json()).length;
+check(before === after, 'a preflight changes nothing');
+
+// A refused destination is refused with reasons, not with a failed request.
+const refusedRes = await fetch(`${BASE}api/move/preflight`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ref: subject.id, toBackend: 'incus' }),
+});
+const refused = await refusedRes.json();
+check(refusedRes.status === 200 && refused.ok === false, 'a move onto incus is refused');
+check((refused.refusals || []).every((r) => r.reason), 'every refusal carries a reason');
+
+
+// ── /metrics (ADR-0011) ───────────────────────────────────────────
+// The endpoint answers whether or not collection is on: a scraper that gets a
+// 503 records nothing, and "corral is up but not collecting" is the state
+// worth alerting on, so it is a metric rather than an error.
+const metricsRes = await fetch(`${BASE}metrics`);
+const metricsBody = await metricsRes.text();
+check(metricsRes.status === 200, '/metrics answers 200');
+check(
+  (metricsRes.headers.get('content-type') || '').startsWith('text/plain'),
+  '/metrics serves the exposition content type',
+);
+check(
+  metricsBody.includes('# TYPE corral_collection_success gauge'),
+  '/metrics always reports whether collection is working',
+);
+
 check(pageErrors.length === 0, `no JS page errors (${pageErrors.join('; ').slice(0, 200)})`);
 
 await browser.close();
