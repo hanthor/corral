@@ -1,0 +1,46 @@
+name: Bump Homebrew formula
+
+# Keeps the Homebrew formula in sync with tagged releases so `brew upgrade`
+# always tracks the latest corral. Fires when a GitHub release is published
+# (and on a raw tag push as a fallback); can also be run by hand to backfill.
+#
+# Requires a repo/org secret HOMEBREW_TAP_TOKEN: a PAT (or fine-grained token)
+# with contents:write on tuna-os/homebrew-tap. The default GITHUB_TOKEN cannot
+# push to another repository.
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish to the tap (e.g. v0.4.0)"
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    # Plugin channel tags (plugins-*) also match the tag trigger; only real
+    # semver releases should touch the formula.
+    if: >-
+      github.event_name != 'push' ||
+      startsWith(github.ref_name, 'v')
+    steps:
+      - name: Bump corral in tuna-os/homebrew-tap
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          # Named corral-vm in the tap to avoid clashing with homebrew/core's
+          # unrelated "corral"; the installed binary is still `corral`.
+          formula-name: corral-vm
+          formula-path: Formula/corral-vm.rb
+          homebrew-tap: tuna-os/homebrew-tap
+          tag-name: ${{ github.event.release.tag_name || github.event.inputs.tag || github.ref_name }}
+          download-url: https://github.com/tuna-os/corral/archive/refs/tags/${{ github.event.release.tag_name || github.event.inputs.tag || github.ref_name }}.tar.gz
+          commit-message: |
+            corral {{version}}
+
+            Created by https://github.com/mislav/bump-homebrew-formula-action
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

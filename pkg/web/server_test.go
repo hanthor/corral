@@ -11,8 +11,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 )
+
+// forceKubevirt makes config.Contexts() offer a kubevirt target for the
+// duration of a test, so /api/nodes takes the cluster (kubectl) path
+// regardless of whether the test host has a kubeconfig.
+func forceKubevirt(t *testing.T) {
+	t.Helper()
+	config.SetForceKubevirtContext(true)
+	t.Cleanup(func() { config.SetForceKubevirtContext(false) })
+}
 
 // TestStaticServed verifies the embedded SPA (index.html + assets) is served.
 func TestStaticServed(t *testing.T) {
@@ -157,7 +167,38 @@ func TestHandleListVMs_OneVM(t *testing.T) {
 	}
 }
 
-func TestHandleListVMs_KubectlError(t *testing.T) {
+// A failing NON-default backend (here KubeVirt, on a qemu-default host with a
+// stray kubeconfig) must not produce the full-page offline error: the default
+// backend (qemu) listed fine, just empty. The dashboard renders an empty fleet
+// and the KubeVirt failure is a silent partial (#91).
+func TestHandleListVMs_NonDefaultBackendError_NotOffline(t *testing.T) {
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	fx.Runner.AddResponseKV("kubectl", []string{"get", "vms", "-A", "-o", "json"},
+		"", fmt.Errorf("kubectl: connection refused"))
+
+	resp := mustGet(t, fx.Server.URL+"/api/vms")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200 (qemu is the default backend and listed fine)", resp.StatusCode)
+	}
+	if resp.Header.Get("X-Corral-Partial") != "true" {
+		t.Error("expected X-Corral-Partial header flagging the KubeVirt failure")
+	}
+	var vms []map[string]any
+	json.NewDecoder(resp.Body).Decode(&vms)
+	if len(vms) != 0 {
+		t.Errorf("expected empty fleet, got %d", len(vms))
+	}
+}
+
+// When the user's PRIMARY backend is the one that's down and there's nothing to
+// show, the offline (502) state is still correct — that's the real "connect a
+// cluster" case for a KubeVirt-default deployment.
+func TestHandleListVMs_DefaultBackendDown_Offline(t *testing.T) {
+	t.Setenv("CORRAL_DEFAULT_BACKEND", "kubevirt")
 	fx := NewTestFixture()
 	defer fx.Close()
 
@@ -170,7 +211,6 @@ func TestHandleListVMs_KubectlError(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", resp.StatusCode)
 	}
-
 	var body map[string]string
 	json.NewDecoder(resp.Body).Decode(&body)
 	if body["error"] == "" {
@@ -461,6 +501,7 @@ func TestHandleVMInfo_Success(t *testing.T) {
 // ── handleNodes ────────────────────────────────────────────────────
 
 func TestHandleNodes_Success(t *testing.T) {
+	forceKubevirt(t)
 	fx := NewTestFixture()
 	defer fx.Close()
 
@@ -485,6 +526,7 @@ func TestHandleNodes_Success(t *testing.T) {
 }
 
 func TestHandleNodes_Error(t *testing.T) {
+	forceKubevirt(t)
 	fx := NewTestFixture()
 	defer fx.Close()
 
@@ -496,6 +538,35 @@ func TestHandleNodes_Error(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", resp.StatusCode)
+	}
+}
+
+// A host with no KubeVirt context (only local QEMU/Incus/libvirt) must not
+// surface a "no cluster connected" error just because kubectl fails — it has
+// no cluster by design. /api/nodes returns the synthetic local host instead,
+// so the dashboard renders normally rather than nagging about KubeVirt (#91).
+func TestHandleNodes_LocalOnlyNoCluster(t *testing.T) {
+	config.SetForceKubevirtContext(false)
+	t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("HOME", t.TempDir()) // no ~/.kube/config → kubevirt is not configured
+	fx := NewTestFixture()
+	defer fx.Close()
+
+	// kubectl would fail here, but the local-only path must never call it.
+	fx.Runner.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"},
+		"", fmt.Errorf("kubectl: connection refused"))
+
+	resp := mustGet(t, fx.Server.URL+"/api/nodes")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200", resp.StatusCode)
+	}
+	var nodes []map[string]any
+	json.NewDecoder(resp.Body).Decode(&nodes)
+	if len(nodes) != 1 || nodes[0]["name"] != "local" {
+		t.Fatalf("expected a single synthetic local node, got %v", nodes)
 	}
 }
 
@@ -655,6 +726,7 @@ func TestHandleListVMs_WithRunningVMI(t *testing.T) {
 // ── handleNodes roles ────────────────────────────────────────────
 
 func TestHandleNodes_WithRoles(t *testing.T) {
+	forceKubevirt(t)
 	fx := NewTestFixture()
 	defer fx.Close()
 
