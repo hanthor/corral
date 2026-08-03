@@ -29,7 +29,7 @@ jobs:
       startsWith(github.ref_name, 'v')
     steps:
       - name: Bump corral in tuna-os/homebrew-tap
-        uses: mislav/bump-homebrew-formula-action@v3
+        uses: mislav/bump-homebrew-formula-action@v4.2
         with:
           # Named corral-vm in the tap to avoid clashing with homebrew/core's
           # unrelated "corral"; the installed binary is still `corral`.
