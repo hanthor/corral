@@ -17,7 +17,7 @@ env:
 
 jobs:
   test:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -75,7 +75,7 @@ jobs:
     # corral-web image: the web UI served on the cluster (deploy/corral-web.yaml)
     needs: test
     if: github.event_name != 'pull_request'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -115,7 +115,7 @@ jobs:
     # https://github.com/hanthor/corral/releases/download/binaries/corral-linux-<arch>
     needs: test
     if: github.event_name != 'pull_request'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -163,7 +163,7 @@ jobs:
     # "plugins" release that marketplace/index.json points at.
     needs: test
     if: github.event_name != 'pull_request'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
