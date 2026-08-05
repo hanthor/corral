@@ -273,7 +273,14 @@ func (d *demoCluster) dispatch(stdin, name string, args []string) ([]byte, error
 		if hasJSONOutput(args) {
 			return demoKubeVirtCRJSON, nil // doctor: gates, rollout, workload updates
 		}
-		return []byte("kubevirt"), nil
+		// The `-o name` form, with the resource prefix: doctor's okList requires
+		// a real resource name rather than a clean exit, because kubectl exits 0
+		// with "No resources found" and a bare word would read as an install
+		// where there is none (#168).
+		return []byte("kubevirt.kubevirt.io/kubevirt"), nil
+	case strings.HasPrefix(key, "get cdi"):
+		// The CDI CR, which is doctor's primary signal for "CDI is installed".
+		return []byte("cdi.cdi.kubevirt.io/cdi"), nil
 	case key == "get sc -o json" || key == "get storageclass -o json":
 		return demoStorageClassJSON, nil
 	case strings.HasPrefix(key, "get storageprofile"):
