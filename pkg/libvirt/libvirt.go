@@ -73,7 +73,13 @@ func (c Client) Start(name string) error { _, err := c.run("start", name); retur
 // the guest to be listening for ACPI — a guest that ignores it stays up, which
 // is the honest outcome and not something to paper over with a destroy.
 func (c Client) Restart(name string) error { _, err := c.run("reboot", name); return err }
-func (c Client) Stop(name string) error    { _, err := c.run("shutdown", name); return err }
+
+// Pause and Resume are virsh suspend/resume: the domain's vCPUs stop, its
+// memory stays allocated, and resume continues from that exact point. Distinct
+// from destroy/start, which is a reboot.
+func (c Client) Pause(name string) error  { _, err := c.run("suspend", name); return err }
+func (c Client) Resume(name string) error { _, err := c.run("resume", name); return err }
+func (c Client) Stop(name string) error   { _, err := c.run("shutdown", name); return err }
 func (c Client) Delete(name string) error {
 	_, _ = c.run("destroy", name)
 	_, err := c.run("undefine", name, "--remove-all-storage", "--nvram")

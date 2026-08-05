@@ -383,8 +383,16 @@ func TestFolderAction_SkippedIsNotFailed(t *testing.T) {
 
 // A heterogeneous folder is the normal case, and an action valid for one backend
 // may be unsupported on another. The response says which member, which backend,
-// and what was missing.
-func TestFolderAction_ReportsPerBackendRefusals(t *testing.T) {
+// A pool spans backends, so a bulk action fans out to several at once and the
+// response says what each member did.
+//
+// This used to assert a *refusal* — pause was KubeVirt-only, so a pool holding
+// an Incus VM produced one ok and one "not supported". Every backend implements
+// Power, Restarter and Suspender now, so the folder actions succeed across all
+// of them and the honest assertion is that they do.
+// TestFolderAction_ReportsAnUnreachableBackend keeps the refusal *reporting*
+// covered, since that path is still reachable.
+func TestFolderAction_FansOutAcrossBackends(t *testing.T) {
 	srv := newDemoServer(t)
 	scratchFolders(t)
 
@@ -396,18 +404,43 @@ func TestFolderAction_ReportsPerBackendRefusals(t *testing.T) {
 
 	var got actionResponse
 	postJSON(t, srv, "/api/folders/action", map[string]any{"path": "stack", "action": "pause"}, &got)
-	if got.Failed != 1 {
+	if got.Failed != 0 {
 		t.Errorf("outcome = %d ok / %d failed / %d skipped: %+v",
 			got.OK, got.Failed, got.Skipped, got.Members)
 	}
-	var refusal string
+	backends := map[string]bool{}
 	for _, member := range got.Members {
-		if member.Backend == "incus" {
-			refusal = member.Error
+		backends[member.Backend] = true
+	}
+	for _, want := range []string{"kubevirt", "incus"} {
+		if !backends[want] {
+			t.Errorf("the fan-out missed the %s member: %+v", want, got.Members)
 		}
 	}
-	if !strings.Contains(refusal, "incus") || !strings.Contains(refusal, "pause") {
-		t.Errorf("refusal = %q, want it to name the backend and the action", refusal)
+}
+
+// The refusal path is still reachable: a pool can point at an instance whose
+// backend is no longer configured — a peer that went away, or a context removed
+// from the config. That member must report why rather than failing the whole
+// fan-out or vanishing from the response.
+func TestFolderAction_ReportsAnUnreachableBackend(t *testing.T) {
+	ref := types.InstanceRef{Backend: "vmware", Name: "legacy"}
+	live := map[string]types.VM{
+		ref.String(): {Name: "legacy", Backend: "vmware", Running: true},
+	}
+
+	outcome := runFolderAction(ref, "pause", live)
+	if outcome.OK {
+		t.Fatal("an unregistered backend reported success")
+	}
+	if outcome.Error == "" {
+		t.Fatal("the member failed with no reason attached")
+	}
+	if !strings.Contains(outcome.Error, "vmware") {
+		t.Errorf("the reason does not name the backend: %q", outcome.Error)
+	}
+	if outcome.Name != "legacy" || outcome.Backend != "vmware" {
+		t.Errorf("the outcome should identify the member: %+v", outcome)
 	}
 }
 

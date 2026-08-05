@@ -194,6 +194,20 @@ func (c Client) Restart(name string) error {
 	return nil
 }
 
+// Pause and Resume suspend the instance to memory. Incus spells the second
+// half `incus start` — the same verb as a cold boot — but applied to a frozen
+// instance it resumes rather than boots, which is why this wraps it under a
+// name that says which of the two is happening.
+func (c Client) Pause(name string) error {
+	if out, err := defaultRunner.Run("incus", "pause", c.target(name)); err != nil {
+		return fmt.Errorf("incus pause %s: %s (%w)", name, string(out), err)
+	}
+	return nil
+}
+
+// Resume unfreezes a paused instance.
+func (c Client) Resume(name string) error { return c.Start(name) }
+
 func (c Client) Start(name string) error {
 	if out, err := defaultRunner.Run("incus", "start", c.target(name)); err != nil {
 		if strings.Contains(string(out), "already running") {

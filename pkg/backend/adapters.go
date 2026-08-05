@@ -162,6 +162,9 @@ func (qemuAdapter) Restart(name string) error {
 	return qemu.Start(name)
 }
 
+func (qemuAdapter) Pause(name string) error  { return qemu.Pause(name) }
+func (qemuAdapter) Resume(name string) error { return qemu.Resume(name) }
+
 // ── Incus ─────────────────────────────────────────────────────────
 
 type incusAdapter struct{ client incus.Client }
@@ -173,6 +176,8 @@ func (a incusAdapter) Stop(name string) error   { return a.client.Stop(name) }
 func (a incusAdapter) Delete(name string) error { return a.client.Delete(name) }
 
 func (a incusAdapter) Restart(name string) error { return a.client.Restart(name) }
+func (a incusAdapter) Pause(name string) error   { return a.client.Pause(name) }
+func (a incusAdapter) Resume(name string) error  { return a.client.Resume(name) }
 
 func (a incusAdapter) Address(name string) (string, error) {
 	instances, err := a.client.ListInstances()
@@ -197,6 +202,8 @@ func (a libvirtAdapter) Start(name string) error   { return a.client.Start(name)
 func (a libvirtAdapter) Stop(name string) error    { return a.client.Stop(name) }
 func (a libvirtAdapter) Delete(name string) error  { return a.client.Delete(name) }
 func (a libvirtAdapter) Restart(name string) error { return a.client.Restart(name) }
+func (a libvirtAdapter) Pause(name string) error   { return a.client.Pause(name) }
+func (a libvirtAdapter) Resume(name string) error  { return a.client.Resume(name) }
 
 // ── Proxmox ───────────────────────────────────────────────────────
 //

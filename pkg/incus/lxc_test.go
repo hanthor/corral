@@ -6,6 +6,7 @@ package incus
 // quietly incomplete (see docs/backend-parity.md).
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -219,3 +220,58 @@ func TestListRejectsGarbage(t *testing.T) {
 		t.Error("List should reject unparseable output rather than returning an empty fleet")
 	}
 }
+
+// ── pause / resume ────────────────────────────────────────────────
+
+// Pause must be `incus pause`, not a stop. Incus resumes with `incus start` —
+// the same verb as a cold boot — which is why Resume exists as its own name
+// rather than leaving callers to guess that starting a frozen instance is a
+// resume.
+func TestPauseAndResumeUseTheNativeVerbs(t *testing.T) {
+	f := shell.NewFake()
+	old := defaultRunner
+	SetRunner(f)
+	t.Cleanup(func() { defaultRunner = old })
+	f.AddPrefixResponse("incus", "", nil)
+
+	client := NewClient("lab")
+	if err := client.Pause("dev"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := client.Resume("dev"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	var verbs []string
+	for _, call := range f.Calls() {
+		if call.Name == "incus" && len(call.Args) > 1 {
+			verbs = append(verbs, call.Args[0]+" "+call.Args[1])
+		}
+	}
+	want := []string{"pause lab:dev", "start lab:dev"}
+	if strings.Join(verbs, ",") != strings.Join(want, ",") {
+		t.Fatalf("commands = %v, want %v", verbs, want)
+	}
+	// A stop would kill the instance and lose its memory — the opposite of a
+	// pause, and an easy mistake to make when both are "make it not run".
+	for _, call := range f.Calls() {
+		if len(call.Args) > 0 && call.Args[0] == "stop" {
+			t.Fatal("pause used incus stop, which discards the guest's memory")
+		}
+	}
+}
+
+func TestPauseSurfacesTheRemoteError(t *testing.T) {
+	f := shell.NewFake()
+	old := defaultRunner
+	SetRunner(f)
+	t.Cleanup(func() { defaultRunner = old })
+	f.AddPrefixResponse("incus", "Error: Instance is not running", errFake)
+
+	err := NewClient("lab").Pause("dev")
+	if err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("want the daemon's reason, got %v", err)
+	}
+}
+
+var errFake = fmt.Errorf("exit status 1")

@@ -131,9 +131,9 @@ var Matrix = map[string]map[string]Entry{
 	},
 	"pause": {
 		"kubevirt": {Shipped, "virtctl pause / unpause"},
-		"qemu":     {Possible, "QMP stop/cont on the unit's QMP socket, which pkg/qemu already creates"},
-		"incus":    {Possible, "incus pause / incus start"},
-		"libvirt":  {Possible, "virsh suspend / virsh resume"},
+		"qemu":     {Shipped, "QMP stop/cont on the unit's QMP socket, pkg/qemu.Pause"},
+		"incus":    {Shipped, "incus pause / incus start, pkg/incus.Pause"},
+		"libvirt":  {Shipped, "virsh suspend / virsh resume, pkg/libvirt.Pause"},
 		"proxmox":  {Shipped, "POST …/status/suspend and /resume"},
 	},
 	"delete": {

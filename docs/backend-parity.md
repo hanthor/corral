@@ -32,7 +32,7 @@ backend cannot, or it is meaningless there.
 | Start | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stop | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Restart | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Pause / resume | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Pause / resume | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Delete | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SSH | ✅ | ✅ | ✅ | 🔨 | ✅ |
 | Serial / shell console | ✅ | 🔨 | ✅ | 🔨 | 🔨 |
@@ -143,9 +143,8 @@ bridge is not, so the capability flags say no and the matrix says why.
 
 ## Gaps by backend
 
-### qemu — 12 gaps
+### qemu — 11 gaps
 
-- **pause** — QMP stop/cont on the unit's QMP socket, which pkg/qemu already creates
 - **tty** — the serial socket the generated unit already defines
 - **rdp** — the same probe and bridge over the hostfwd port
 - **metrics** — QMP query-status / host cgroup accounting for the unit
@@ -158,9 +157,8 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **events** — journalctl --user for the unit
 - **tags** — the local registry, which already persists per-VM state
 
-### incus — 14 gaps
+### incus — 13 gaps
 
-- **pause** — incus pause / incus start
 - **vnc** — incus console --type=vga for Incus VMs; the web vncBridge handles local, libvirt, and cluster namespaces only
 - **rdp** — same, via the instance address
 - **metrics** — incus info or GET /1.0/instances/{name}/state
@@ -175,9 +173,8 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **tags** — instance config user.corral.tag.<name>
 - **ports** — incus config device add … proxy
 
-### libvirt — 14 gaps
+### libvirt — 13 gaps
 
-- **pause** — virsh suspend / virsh resume
 - **ssh** — the domain's address via the guest agent or DHCP leases, then plain ssh — pkg/libvirt has SSH but the TUI does not offer it because the capability table omits it
 - **tty** — virsh console
 - **rdp** — same, via the domain address
