@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/shell"
@@ -373,4 +374,62 @@ func (c Client) SSH(name, command string) error {
 	cmd := exec.Command("incus", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// Metrics reports an instance's live CPU and memory usage.
+//
+// Read from the REST API via `incus query` rather than parsed out of
+// `incus info`: the state endpoint returns JSON with exact numbers, where the
+// human output is a formatted table that changes between versions and would
+// have to be scraped.
+func (c Client) Metrics(name string) (map[string]string, error) {
+	res := map[string]string{"cpu": "", "mem": ""}
+	path := fmt.Sprintf("/1.0/instances/%s/state", name)
+	if c.Remote != "" && c.Remote != "local" {
+		path = fmt.Sprintf("/1.0/instances/%s/state?project=default", name)
+	}
+	out, err := defaultRunner.Run("incus", "query", c.queryTarget(path))
+	if err != nil {
+		return res, fmt.Errorf("incus query %s: %s (%w)", name, string(out), err)
+	}
+	var state struct {
+		CPU struct {
+			Usage int64 `json:"usage"` // cumulative nanoseconds
+		} `json:"cpu"`
+		Memory struct {
+			Usage int64 `json:"usage"` // bytes
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal(out, &state); err != nil {
+		return res, fmt.Errorf("incus state for %s: %w", name, err)
+	}
+	if state.Memory.Usage > 0 {
+		res["mem"] = humanBytes(state.Memory.Usage)
+	}
+	// CPU usage is cumulative since boot, so it is reported as total CPU time
+	// rather than a rate. Calling a lifetime total "usage" without saying so
+	// would read as a percentage and be wrong by orders of magnitude.
+	if state.CPU.Usage > 0 {
+		res["cpu"] = fmt.Sprintf("%s total", (time.Duration(state.CPU.Usage) * time.Nanosecond).Round(time.Second))
+	}
+	return res, nil
+}
+
+// queryTarget prefixes a remote for `incus query`, which takes the remote on
+// the path rather than as a separate argument.
+func (c Client) queryTarget(path string) string {
+	if c.Remote == "" || c.Remote == "local" {
+		return path
+	}
+	return c.Remote + ":" + path
+}
+
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fGi", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.0fMi", float64(b)/(1<<20))
+	}
+	return fmt.Sprintf("%dKi", b/1024)
 }

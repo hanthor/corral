@@ -39,6 +39,16 @@ func SetStateDirs(vmHome, unitDir string) { vmHomeOverride, unitDirOverride = vm
 // SetSystemctl overrides the systemd --user command runner.
 func SetSystemctl(f func(args ...string) ([]byte, error)) { systemctlRun = f }
 
+// journalRun reads the journal. Its own seam rather than systemctlRun's,
+// because it is a different binary with different arguments and tests script
+// the two independently.
+var journalRun = func(args ...string) ([]byte, error) {
+	return exec.Command("journalctl", args...).CombinedOutput()
+}
+
+// SetJournalctl overrides the journal reader (for tests).
+func SetJournalctl(f func(args ...string) ([]byte, error)) { journalRun = f }
+
 // systemdUserDir returns the systemd user unit directory.
 func systemdUserDir() string {
 	if unitDirOverride != "" {

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/shell"
@@ -195,4 +196,79 @@ func memoryMiB(s string) string {
 		return strconv.Itoa(n * 1024)
 	}
 	return strings.TrimSuffix(s, "M")
+}
+
+// Metrics reports a domain's live CPU and memory usage from virsh domstats.
+//
+// cpu.time is cumulative nanoseconds, so CPU is sampled twice a known interval
+// apart and reported as a rate — a single reading would be lifetime CPU time
+// presented as though it were current usage.
+//
+// Memory is balloon.rss, the host-side resident size of the QEMU process,
+// which is what the host is actually spending. balloon.current is what the
+// guest was *given* and stays flat at its configured size, so it looks like a
+// working metric while telling you nothing.
+func (c Client) Metrics(name string) (map[string]string, error) {
+	res := map[string]string{"cpu": "", "mem": ""}
+
+	first, err := c.domStats(name)
+	if err != nil {
+		return res, err
+	}
+	if rss, ok := first["balloon.rss"]; ok && rss > 0 {
+		res["mem"] = humanBytes(rss * 1024) // domstats reports KiB
+	}
+	cpuFirst, ok := first["cpu.time"]
+	if !ok {
+		return res, nil
+	}
+
+	time.Sleep(cpuSampleInterval)
+	second, err := c.domStats(name)
+	if err != nil {
+		return res, nil // memory already read; a failed second sample is not fatal
+	}
+	cpuSecond, ok := second["cpu.time"]
+	if !ok || cpuSecond < cpuFirst {
+		return res, nil
+	}
+	percent := float64(cpuSecond-cpuFirst) / float64(cpuSampleInterval.Nanoseconds()) * 100
+	res["cpu"] = fmt.Sprintf("%.0f%%", percent)
+	return res, nil
+}
+
+// cpuSampleInterval is the gap between the two cpu.time readings. Long enough
+// to be stable against scheduler jitter, short enough that a polling fleet view
+// does not feel it.
+var cpuSampleInterval = 200 * time.Millisecond
+
+// domStats parses `virsh domstats --raw` output: "  name=value" lines under a
+// "Domain: 'x'" header. Only the numeric fields are kept, which is all the
+// caller wants.
+func (c Client) domStats(name string) (map[string]int64, error) {
+	out, err := c.run("domstats", name, "--cpu-total", "--balloon", "--raw")
+	if err != nil {
+		return nil, fmt.Errorf("virsh domstats %s: %w", name, err)
+	}
+	stats := map[string]int64{}
+	for _, line := range strings.Split(string(out), "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if !found {
+			continue
+		}
+		if n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+			stats[strings.TrimSpace(key)] = n
+		}
+	}
+	return stats, nil
+}
+
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fGi", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.0fMi", float64(b)/(1<<20))
+	}
+	return fmt.Sprintf("%dKi", b/1024)
 }

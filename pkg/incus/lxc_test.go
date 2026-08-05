@@ -275,3 +275,56 @@ func TestPauseSurfacesTheRemoteError(t *testing.T) {
 }
 
 var errFake = fmt.Errorf("exit status 1")
+
+// ── metrics ───────────────────────────────────────────────────────
+
+// The state endpoint via `incus query`, not scraped from `incus info`: the
+// REST answer is exact numbers, where the human output is a formatted table
+// that shifts between versions.
+func TestMetricsReadsTheStateEndpoint(t *testing.T) {
+	f := shell.NewFake()
+	old := defaultRunner
+	SetRunner(f)
+	t.Cleanup(func() { defaultRunner = old })
+	f.AddPrefixResponse("incus query",
+		`{"cpu":{"usage":123000000000},"memory":{"usage":2147483648}}`, nil)
+
+	got, err := NewClient("lab").Metrics("dev")
+	if err != nil {
+		t.Fatalf("Metrics: %v", err)
+	}
+	if got["mem"] != "2.0Gi" {
+		t.Errorf("mem = %q, want 2.0Gi", got["mem"])
+	}
+	// Incus reports CPU as cumulative nanoseconds since boot. Presenting that
+	// as a bare number would read as a percentage and be wrong by orders of
+	// magnitude, so the value says what it is.
+	if got["cpu"] != "2m3s total" {
+		t.Errorf("cpu = %q, want the lifetime total labelled as such", got["cpu"])
+	}
+
+	var queried string
+	for _, call := range f.Calls() {
+		if call.Name == "incus" && len(call.Args) > 1 && call.Args[0] == "query" {
+			queried = call.Args[1]
+		}
+	}
+	if !strings.HasPrefix(queried, "lab:") {
+		t.Errorf("query path %q does not carry the remote", queried)
+	}
+	if !strings.Contains(queried, "/1.0/instances/dev/state") {
+		t.Errorf("query path = %q, want the instance state endpoint", queried)
+	}
+}
+
+func TestMetricsSurfacesAQueryFailure(t *testing.T) {
+	f := shell.NewFake()
+	old := defaultRunner
+	SetRunner(f)
+	t.Cleanup(func() { defaultRunner = old })
+	f.AddPrefixResponse("incus query", "Error: Instance not found", errFake)
+
+	if _, err := NewClient("lab").Metrics("gone"); err == nil {
+		t.Fatal("a missing instance reported metrics")
+	}
+}
