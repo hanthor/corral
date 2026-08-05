@@ -156,7 +156,16 @@ var statDevKVM = func() error {
 func clusterChecks() []Check {
 	var checks []Check
 
-	kvInstalled := ok("kubectl", "get", "kubevirt", "-n", "kubevirt")
+	// The CR, cluster-wide, via okList — not `-n kubevirt`, and not a plain
+	// exit-code check.
+	//
+	// Both details are load-bearing. The Hyperconverged Cluster Operator
+	// installs into kubevirt-hyperconverged, so a namespace-scoped lookup finds
+	// nothing on a perfectly good cluster; and `kubectl get` exits 0 with "No
+	// resources found" when the namespace is empty, so a plain ok() reported
+	// KubeVirt as *installed* on exactly that cluster — a false pass, which is
+	// the failure okList exists to prevent (#168).
+	kvInstalled := okList("get", "kubevirt", "-A")
 	checks = append(checks, Check{
 		Name:    "KubeVirt installed",
 		OK:      kvInstalled,
@@ -164,8 +173,17 @@ func clusterChecks() []Check {
 		Fixable: !kvInstalled,
 		fix:     installKubeVirt,
 	})
-	// Label selector (not hardcoded namespace) — CDI may be installed anywhere.
-	cdiInstalled := okList("get", "deploy", "-A", "-l", "cdi.kubevirt.io=cdi-operator")
+	// CDI, by either of two signals, because one is not enough in practice.
+	//
+	// The CR is the real answer: it exists once CDI is installed and reconciled,
+	// wherever that happened. The operator-deployment label is kept as a
+	// fallback for a CDI whose CR has not appeared yet — but it cannot be the
+	// only signal, because the upstream label is absent when HCO owns the
+	// install and Corral then offers to install a *second* CDI alongside the
+	// operator's (#168). Duplicating a cluster-wide operator is much worse than
+	// a missed check, so this errs toward finding one.
+	cdiInstalled := okList("get", "cdi", "-A") ||
+		okList("get", "deploy", "-A", "-l", "cdi.kubevirt.io=cdi-operator")
 	checks = append(checks, Check{
 		Name:    "CDI installed",
 		OK:      cdiInstalled,
@@ -439,6 +457,14 @@ func applyURL(url string) error {
 // reconciles Corral's feature gates (the CR may not be admitted yet — a
 // follow-up `doctor fix` finishes the job once virt-operator is up).
 func installKubeVirt() error {
+	// Same guard as installCDI, for the same reason: a second virt-operator
+	// reconciling the same CRDs against a different version is a cluster-wide
+	// problem, and HCO-managed clusters are exactly where detection is hardest.
+	if okList("get", "kubevirt", "-A") {
+		return fmt.Errorf("KubeVirt is already installed in this cluster (a KubeVirt resource exists) — " +
+			"installing another operator would leave two reconciling the same CRDs; " +
+			"if Corral is not detecting it, please report the output of `kubectl get kubevirt -A`")
+	}
 	base := "https://github.com/kubevirt/kubevirt/releases/download/" + KubeVirtVersion
 	if err := applyURL(base + "/kubevirt-operator.yaml"); err != nil {
 		return err
@@ -468,7 +494,19 @@ func installMetricsServer() error {
 }
 
 // installCDI applies the upstream containerized-data-importer operator + CR.
+// installCDI refuses when CDI is already present anywhere in the cluster.
+//
+// The check above should have caught that, but this is the operation that
+// cannot be allowed to run twice: a second CDI operator fighting the first over
+// the same CRDs is a cluster-wide mess, and the reporter of #168 was one
+// `--fix` away from it. A detection bug should cost a misleading row, not a
+// duplicated operator, so the destructive step re-asks rather than trusting it.
 func installCDI() error {
+	if okList("get", "cdi", "-A") {
+		return fmt.Errorf("CDI is already installed in this cluster (a CDI resource exists) — " +
+			"installing another operator would leave two fighting over the same CRDs; " +
+			"if Corral is not detecting it, please report the output of `kubectl get cdi -A`")
+	}
 	base := "https://github.com/kubevirt/containerized-data-importer/releases/download/" + CDIVersion
 	if err := applyURL(base + "/cdi-operator.yaml"); err != nil {
 		return err

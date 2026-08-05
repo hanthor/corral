@@ -59,7 +59,7 @@ const healthySCJSON = `{
 // scriptHealthyCluster registers responses describing a fully configured cluster.
 func scriptHealthyCluster(fake *shell.Fake) {
 	scriptReachable(fake)
-	fake.AddResponse("kubectl get kubevirt -n kubevirt", "kubevirt", nil)
+	fake.AddResponse("kubectl get kubevirt -A -o name", "kubevirt.kubevirt.io/kubevirt", nil)
 	fake.AddResponse("kubectl get deploy -A -l cdi.kubevirt.io=cdi-operator -o name", "deployment.apps/cdi-operator", nil)
 	fake.AddResponse("kubectl get kubevirt kubevirt -n kubevirt -o json", healthyKubeVirtJSON, nil)
 	fake.AddResponse("kubectl get sc -o json", healthySCJSON, nil)
@@ -551,6 +551,92 @@ func TestRun_StorageProfile_Absent_ChecksHidden(t *testing.T) {
 	for _, c := range Run() {
 		if c.Name == "Fast VM cloning" || c.Name == "Migratable storage (RWX)" {
 			t.Errorf("storage-profile checks should be absent without a profile, got %+v", c)
+		}
+	}
+}
+
+// ── Hyperconverged Cluster Operator layouts (#168) ────────────────
+//
+// HCO installs KubeVirt and CDI into kubevirt-hyperconverged, and labels the
+// CDI operator as its own. The reporter's cluster had both installed and
+// working, and Corral said CDI was missing and offered to install a second one.
+
+// scriptHCOCluster describes that cluster: the CRs exist cluster-wide, the
+// kubevirt namespace is empty, and the upstream CDI operator label matches
+// nothing.
+func scriptHCOCluster(fake *shell.Fake) {
+	scriptReachable(fake)
+	fake.AddResponse("kubectl get kubevirt -A -o name",
+		"kubevirt.kubevirt.io/kubevirt-kubevirt-hyperconverged", nil)
+	fake.AddResponse("kubectl get cdi -A -o name", "cdi.cdi.kubevirt.io/cdi-kubevirt-hyperconverged", nil)
+	fake.AddResponse("kubectl get deploy -A -l cdi.kubevirt.io=cdi-operator -o name", "", nil)
+	fake.AddResponse("kubectl get kubevirt kubevirt -n kubevirt -o json", healthyKubeVirtJSON, nil)
+}
+
+func TestRun_HCONamespace_DetectsKubeVirtAndCDI(t *testing.T) {
+	fake := withFake(t)
+	scriptHCOCluster(fake)
+
+	for _, name := range []string{"KubeVirt installed", "CDI installed"} {
+		c := checkByName(t, Run(), name)
+		if !c.OK {
+			t.Errorf("%s reported missing on an HCO cluster: %s", name, c.Detail)
+		}
+		if c.Fixable {
+			t.Errorf("%s offered to install a second copy alongside the operator's", name)
+		}
+	}
+}
+
+// The false pass this replaces: `kubectl get` exits 0 with "No resources found"
+// on an empty namespace, so the old `-n kubevirt` check reported KubeVirt as
+// installed when it was not there at all.
+func TestRun_EmptyNamespaceIsNotAnInstall(t *testing.T) {
+	fake := withFake(t)
+	scriptReachable(fake)
+	fake.AddResponse("kubectl get kubevirt -A -o name", "No resources found\n", nil)
+
+	c := checkByName(t, Run(), "KubeVirt installed")
+	if c.OK {
+		t.Fatal("an empty result was read as an install — kubectl exits 0 with no matches")
+	}
+}
+
+// A CDI whose CR has not appeared yet is still an install; the operator
+// deployment is the fallback signal.
+func TestRun_CDIDetectedByOperatorDeploymentAlone(t *testing.T) {
+	fake := withFake(t)
+	scriptReachable(fake)
+	fake.AddResponse("kubectl get kubevirt -A -o name", "kubevirt.kubevirt.io/kubevirt", nil)
+	fake.AddResponse("kubectl get cdi -A -o name", "", nil)
+	fake.AddResponse("kubectl get deploy -A -l cdi.kubevirt.io=cdi-operator -o name",
+		"deployment.apps/cdi-operator", nil)
+
+	if c := checkByName(t, Run(), "CDI installed"); !c.OK {
+		t.Fatalf("CDI with an operator but no CR yet should count as installed: %s", c.Detail)
+	}
+}
+
+// The guard that matters most: even if detection is wrong, the destructive step
+// must not duplicate a cluster-wide operator. This is what the reporter of #168
+// was one `--fix` away from.
+func TestInstallRefusesToDuplicateAnExistingOperator(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponse("kubectl get cdi -A -o name", "cdi.cdi.kubevirt.io/cdi-kubevirt-hyperconverged", nil)
+	fake.AddResponse("kubectl get kubevirt -A -o name", "kubevirt.kubevirt.io/kubevirt-kubevirt-hyperconverged", nil)
+
+	for name, install := range map[string]func() error{"CDI": installCDI, "KubeVirt": installKubeVirt} {
+		err := install()
+		if err == nil {
+			t.Fatalf("install%s ran against a cluster that already has it", name)
+		}
+		if !strings.Contains(err.Error(), "already installed") {
+			t.Errorf("install%s error does not explain itself: %v", name, err)
+		}
+	}
+	for _, call := range fake.Calls() {
+		if len(call.Args) > 0 && call.Args[0] == "apply" {
+			t.Fatalf("a duplicate install was applied anyway: %v", call.Args)
 		}
 	}
 }
