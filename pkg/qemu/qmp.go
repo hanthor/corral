@@ -223,3 +223,36 @@ func readPPMInt(r *bufio.Reader) (int, error) {
 	}
 	return n, nil
 }
+
+// Pause and Resume stop and restart the guest's vCPUs through QMP.
+//
+// This is a real suspend-to-memory, not a stop: the guest's RAM stays
+// allocated, its clock stops, and `cont` resumes it exactly where it was. A
+// stop-then-start would be a reboot wearing the wrong name, which is the
+// distinction pkg/backend's Suspender family exists to keep honest.
+//
+// The QMP socket only exists on VMs created by a corral new enough to add
+// `-qmp` to the unit, so the error says how to get one rather than just
+// reporting a missing file.
+func Pause(name string) error { return qmpSimple(name, "stop", "pause") }
+
+// Resume restarts a paused guest's vCPUs.
+func Resume(name string) error { return qmpSimple(name, "cont", "resume") }
+
+func qmpSimple(name, command, verb string) error {
+	sockPath := filepath.Join(VMHome(), name, "qmp.sock")
+	if _, err := os.Stat(sockPath); err != nil {
+		return fmt.Errorf("no QMP socket for %q, so it cannot be %sd — is it running? "+
+			"if it was created with an older corral, recreate it (corral create --force ...) "+
+			"to pick up QMP support", name, verb)
+	}
+	conn, reader, err := qmpDial(sockPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := qmpExecute(conn, reader, command, nil); err != nil {
+		return fmt.Errorf("qmp %s: %w", command, err)
+	}
+	return nil
+}

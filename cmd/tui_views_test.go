@@ -876,11 +876,14 @@ func TestTUIBackendAction_RefusesWithTheBackendNamed(t *testing.T) {
 		Name: "incus-demo-vm", Backend: "incus", Context: "local",
 		Status: "Running", Running: true,
 	})
-	m.performBackendAction("pause")
+	// migrate, not pause: pause is implemented on every backend now, so it no
+	// longer demonstrates a refusal. Incus cannot migrate between remotes yet,
+	// and the matrix names that gap.
+	m.performBackendAction("migrate")
 	if m.noticeKind != "error" {
 		t.Fatalf("notice kind = %q, want an error", m.noticeKind)
 	}
-	for _, want := range []string{"incus", "pause", "backend-parity"} {
+	for _, want := range []string{"incus", "migrate", "backend-parity"} {
 		if !strings.Contains(m.notice, want) {
 			t.Errorf("refusal %q does not mention %q", m.notice, want)
 		}

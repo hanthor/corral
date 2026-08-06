@@ -131,9 +131,9 @@ var Matrix = map[string]map[string]Entry{
 	},
 	"pause": {
 		"kubevirt": {Shipped, "virtctl pause / unpause"},
-		"qemu":     {Possible, "QMP stop/cont on the unit's QMP socket, which pkg/qemu already creates"},
-		"incus":    {Possible, "incus pause / incus start"},
-		"libvirt":  {Possible, "virsh suspend / virsh resume"},
+		"qemu":     {Shipped, "QMP stop/cont on the unit's QMP socket, pkg/qemu.Pause"},
+		"incus":    {Shipped, "incus pause / incus start, pkg/incus.Pause"},
+		"libvirt":  {Shipped, "virsh suspend / virsh resume, pkg/libvirt.Pause"},
 		"proxmox":  {Shipped, "POST …/status/suspend and /resume"},
 	},
 	"delete": {
@@ -173,9 +173,9 @@ var Matrix = map[string]map[string]Entry{
 	},
 	"metrics": {
 		"kubevirt": {Shipped, "kubectl top pod, metrics-server"},
-		"qemu":     {Possible, "QMP query-status / host cgroup accounting for the unit"},
-		"incus":    {Possible, "incus info or GET /1.0/instances/{name}/state"},
-		"libvirt":  {Possible, "virsh domstats"},
+		"qemu":     {Shipped, "the unit's cgroup via systemctl show, pkg/qemu.Metrics — host-side cost, sampled twice for a CPU rate"},
+		"incus":    {Shipped, "incus query /1.0/instances/{name}/state, pkg/incus.Metrics"},
+		"libvirt":  {Shipped, "virsh domstats --cpu-total --balloon, pkg/libvirt.Metrics"},
 		"proxmox":  {Shipped, "GET …/status/current for live usage, /rrddata for the sparkline's real history"},
 	},
 	"snapshots": {
@@ -243,9 +243,9 @@ var Matrix = map[string]map[string]Entry{
 	},
 	"events": {
 		"kubevirt": {Shipped, "kubectl get events for the VM and its launcher pod"},
-		"qemu":     {Possible, "journalctl --user for the unit"},
-		"incus":    {Possible, "incus monitor, or the events websocket"},
-		"libvirt":  {Possible, "virsh event / domain lifecycle events"},
+		"qemu":     {Shipped, "journalctl --user for the unit, pkg/qemu.Events"},
+		"incus":    {Unsupported, "incus monitor is a subscription to what happens next; Incus keeps no queryable event history, so there is nothing to read at the moment a view asks"},
+		"libvirt":  {Unsupported, "virsh event likewise only streams; libvirt keeps no per-domain event log. Both would need Corral to run a collector and store the history itself, which is a feature rather than an adapter"},
 		"proxmox":  {Shipped, "GET /nodes/{node}/tasks filtered by vmid — PVE's task history is its event record"},
 	},
 	"tags": {

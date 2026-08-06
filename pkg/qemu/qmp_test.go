@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -199,5 +200,99 @@ func TestScreenshot_NoSocket(t *testing.T) {
 	err := Screenshot("no-such-vm", filepath.Join(tmp, "out.png"))
 	if err == nil {
 		t.Error("expected error when QMP socket is missing")
+	}
+}
+
+// ── pause / resume ────────────────────────────────────────────────
+
+// recordingQMPServer speaks the handshake and records every command it is
+// asked to execute, so a test can assert which QMP verb was sent rather than
+// only that the call returned nil.
+func recordingQMPServer(t *testing.T, sockPath string, seen *[]string) {
+	t.Helper()
+	if len(sockPath) > 100 {
+		t.Skipf("socket path too long for sun_path (%d bytes): %s", len(sockPath), sockPath)
+	}
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listening on fake QMP socket: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	var mu sync.Mutex
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				conn.Write([]byte(`{"QMP":{"version":{},"capabilities":[]}}` + "\n"))
+				reader := bufio.NewReader(conn)
+				for {
+					line, err := reader.ReadBytes('\n')
+					if err != nil {
+						return
+					}
+					var req map[string]any
+					if json.Unmarshal(line, &req) != nil {
+						continue
+					}
+					command, _ := req["execute"].(string)
+					if command != "qmp_capabilities" {
+						mu.Lock()
+						*seen = append(*seen, command)
+						mu.Unlock()
+					}
+					conn.Write([]byte(`{"return": {}}` + "\n"))
+				}
+			}()
+		}
+	}()
+}
+
+// Pause must be QMP `stop`, not a unit stop. The distinction is the whole
+// point: `stop` freezes the vCPUs with the guest's RAM intact, where stopping
+// the unit kills the process and loses everything not on disk.
+func TestPauseAndResumeUseQMPStopAndCont(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	vmDir := filepath.Join(VMHome(), "pausevm")
+	if err := os.MkdirAll(vmDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	recordingQMPServer(t, filepath.Join(vmDir, "qmp.sock"), &seen)
+
+	if err := Pause("pausevm"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := Resume("pausevm"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := strings.Join(seen, ","); got != "stop,cont" {
+		t.Fatalf("QMP commands = %q, want \"stop,cont\"", got)
+	}
+}
+
+// A VM created before corral added -qmp has no socket. The error has to say
+// how to get one, because "no such file" sends someone looking for a bug that
+// is not there.
+func TestPauseWithoutAQMPSocketExplainsItself(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if err := os.MkdirAll(filepath.Join(VMHome(), "oldvm"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Pause("oldvm")
+	if err == nil {
+		t.Fatal("pausing a VM with no QMP socket reported success")
+	}
+	for _, want := range []string{"oldvm", "corral create --force"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
 	}
 }

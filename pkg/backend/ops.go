@@ -92,10 +92,35 @@ type Tagger interface {
 	SetTag(name, tag string, on bool) error
 }
 
-// Observer reports what a guest is doing: live usage and recent activity.
-type Observer interface {
+// Metricser reports a guest's live resource usage.
+//
+// The values are display strings, not numbers: each backend measures
+// differently — kubectl top gives millicores and MiB, a cgroup gives bytes and
+// cumulative nanoseconds — and inventing a common unit would mean converting
+// figures that do not mean quite the same thing. The surfaces render them as
+// text, so the honest interface hands over text.
+type Metricser interface {
 	Metrics(name string) (map[string]string, error)
+}
+
+// Eventer reports a guest's recent activity.
+//
+// Separate from Metricser, and the split is load-bearing rather than tidiness.
+// libvirt and Incus can both report live usage, but neither keeps event
+// *history* — `virsh event` and `incus monitor` are subscriptions to what
+// happens next, with nothing to ask about what already happened. Under a
+// combined interface those two backends could not report metrics either,
+// which is how both operations came to be gaps together. Same principle as
+// Restarter being separate from Power: a backend should not have to fake half
+// a contract to satisfy the other half.
+type Eventer interface {
 	Events(name string) ([]Event, error)
+}
+
+// Observer is both halves, for a caller that wants them together.
+type Observer interface {
+	Metricser
+	Eventer
 }
 
 // Event is one entry of a guest's recent activity, flattened from whatever the
@@ -184,7 +209,8 @@ var Families = []Family{
 	{"Cloner", []string{"clone"}, func(a Adapter) bool { _, ok := a.(Cloner); return ok }},
 	{"Templater", []string{"template"}, func(a Adapter) bool { _, ok := a.(Templater); return ok }},
 	{"Tagger", []string{"tags"}, func(a Adapter) bool { _, ok := a.(Tagger); return ok }},
-	{"Observer", []string{"metrics", "events"}, func(a Adapter) bool { _, ok := a.(Observer); return ok }},
+	{"Metricser", []string{"metrics"}, func(a Adapter) bool { _, ok := a.(Metricser); return ok }},
+	{"Eventer", []string{"events"}, func(a Adapter) bool { _, ok := a.(Eventer); return ok }},
 }
 
 // Implemented returns the families a backend's adapter satisfies. It builds a

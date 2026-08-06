@@ -162,6 +162,29 @@ func (qemuAdapter) Restart(name string) error {
 	return qemu.Start(name)
 }
 
+func (qemuAdapter) Pause(name string) error  { return qemu.Pause(name) }
+func (qemuAdapter) Resume(name string) error { return qemu.Resume(name) }
+
+func (qemuAdapter) Metrics(name string) (map[string]string, error) { return qemu.Metrics(name) }
+
+// Events: journald already keeps the local backend's history, keyed by the
+// unit systemd started. This is the only backend outside KubeVirt and PVE
+// where event history exists without Corral recording it itself.
+func (qemuAdapter) Events(name string) ([]Event, error) {
+	entries, err := qemu.Events(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Event, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, Event{
+			Time: e.Time, Kind: e.Kind, Reason: "journal",
+			Object: "unit/corral-" + name, Message: e.Message,
+		})
+	}
+	return out, nil
+}
+
 // ── Incus ─────────────────────────────────────────────────────────
 
 type incusAdapter struct{ client incus.Client }
@@ -173,6 +196,12 @@ func (a incusAdapter) Stop(name string) error   { return a.client.Stop(name) }
 func (a incusAdapter) Delete(name string) error { return a.client.Delete(name) }
 
 func (a incusAdapter) Restart(name string) error { return a.client.Restart(name) }
+func (a incusAdapter) Pause(name string) error   { return a.client.Pause(name) }
+
+func (a incusAdapter) Metrics(name string) (map[string]string, error) {
+	return a.client.Metrics(name)
+}
+func (a incusAdapter) Resume(name string) error { return a.client.Resume(name) }
 
 func (a incusAdapter) Address(name string) (string, error) {
 	instances, err := a.client.ListInstances()
@@ -197,6 +226,12 @@ func (a libvirtAdapter) Start(name string) error   { return a.client.Start(name)
 func (a libvirtAdapter) Stop(name string) error    { return a.client.Stop(name) }
 func (a libvirtAdapter) Delete(name string) error  { return a.client.Delete(name) }
 func (a libvirtAdapter) Restart(name string) error { return a.client.Restart(name) }
+func (a libvirtAdapter) Pause(name string) error   { return a.client.Pause(name) }
+
+func (a libvirtAdapter) Metrics(name string) (map[string]string, error) {
+	return a.client.Metrics(name)
+}
+func (a libvirtAdapter) Resume(name string) error { return a.client.Resume(name) }
 
 // ── Proxmox ───────────────────────────────────────────────────────
 //

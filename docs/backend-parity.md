@@ -32,13 +32,13 @@ backend cannot, or it is meaningless there.
 | Start | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stop | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Restart | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Pause / resume | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Pause / resume | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Delete | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SSH | ✅ | ✅ | ✅ | 🔨 | ✅ |
 | Serial / shell console | ✅ | 🔨 | ✅ | 🔨 | 🔨 |
 | Graphical console (VNC) | ✅ | ✅ | 🔨 | ✅ | 🔨 |
 | RDP | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
-| Live CPU / memory | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Live CPU / memory | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Snapshot / restore | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Migrate | ✅ | — | 🔨 | 🔨 | ✅ |
 | Clone | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
@@ -48,7 +48,7 @@ backend cannot, or it is meaningless there.
 | Expand disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | GPU passthrough | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Export / backup disk | ✅ | ✅ | ✅ | ✅ | 🔨 |
-| Events | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
+| Events | ✅ | ✅ | — | — | ✅ |
 | Tags | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Published ports | ✅ | ✅ | 🔨 | — | — |
 | Containers (CT) | ✅ | — | ✅ | — | 🔨 |
@@ -143,27 +143,22 @@ bridge is not, so the capability flags say no and the matrix says why.
 
 ## Gaps by backend
 
-### qemu — 12 gaps
+### qemu — 9 gaps
 
-- **pause** — QMP stop/cont on the unit's QMP socket, which pkg/qemu already creates
 - **tty** — the serial socket the generated unit already defines
 - **rdp** — the same probe and bridge over the hostfwd port
-- **metrics** — QMP query-status / host cgroup accounting for the unit
 - **clone** — qemu-img convert plus a new unit
 - **template** — the same mark in the local registry
 - **scale** — rewrite the unit and restart
 - **volumes** — qemu-img create plus a unit edit
 - **expand** — qemu-img resize while stopped
 - **gpu** — vfio-pci in the generated unit
-- **events** — journalctl --user for the unit
 - **tags** — the local registry, which already persists per-VM state
 
-### incus — 14 gaps
+### incus — 11 gaps
 
-- **pause** — incus pause / incus start
 - **vnc** — incus console --type=vga for Incus VMs; the web vncBridge handles local, libvirt, and cluster namespaces only
 - **rdp** — same, via the instance address
-- **metrics** — incus info or GET /1.0/instances/{name}/state
 - **migrate** — incus move, including between remotes
 - **clone** — incus copy
 - **template** — incus publish, or the registry mark
@@ -171,17 +166,14 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — incus storage volume attach
 - **expand** — incus config device set … size
 - **gpu** — incus config device add … gpu
-- **events** — incus monitor, or the events websocket
 - **tags** — instance config user.corral.tag.<name>
 - **ports** — incus config device add … proxy
 
-### libvirt — 14 gaps
+### libvirt — 11 gaps
 
-- **pause** — virsh suspend / virsh resume
 - **ssh** — the domain's address via the guest agent or DHCP leases, then plain ssh — pkg/libvirt has SSH but the TUI does not offer it because the capability table omits it
 - **tty** — virsh console
 - **rdp** — same, via the domain address
-- **metrics** — virsh domstats
 - **migrate** — virsh migrate --live to another URI
 - **clone** — virt-clone
 - **template** — the registry mark
@@ -189,7 +181,6 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — virsh attach-disk / detach-disk
 - **expand** — virsh blockresize
 - **gpu** — hostdev in the domain XML
-- **events** — virsh event / domain lifecycle events
 - **tags** — domain metadata
 
 ### proxmox — 5 gaps

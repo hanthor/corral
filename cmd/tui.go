@@ -72,6 +72,12 @@ func vmToItem(vm types.VM, th theme) vmItem {
 	if vm.IP != "" {
 		display += "  " + lipgloss.NewStyle().Foreground(th.p.accent).Render(vm.IP)
 	}
+	// The pool, when it has one. Shown because a grouping nobody can see on the
+	// row is a grouping nobody uses — and omitted when empty, so a fleet that
+	// has not been organised does not carry a column of "(none)".
+	if pool := poolLabel(vm.Ref()); pool != "" {
+		display += "  " + th.chip.Render(pool)
+	}
 	return vmItem{vm: vm, display: display, state: classifyStatus(vm.Status, vm.Running)}
 }
 
@@ -125,7 +131,9 @@ var actionsListItems = []actionItem{
 	{id: "restart", label: "Restart"},
 	{id: "pause", label: "Pause"},
 	{id: "unpause", label: "Resume"},
-	{id: "migrate", label: "Migrate"},
+	{id: "migrate", label: "Migrate (live, same backend)"},
+	{id: "move", label: "Move to another backend"},
+	{id: "pool", label: "Pool…"},
 	{id: "clone", label: "Clone"},
 	{id: "hardware", label: "Edit CPU / RAM"},
 	{id: "snapshot", label: "Snapshots"},
@@ -164,6 +172,11 @@ func actionApplies(id string, vm types.VM) bool {
 			return vm.Capabilities.SSH && vm.Running && !paused
 		}
 		return vm.Capabilities.VNC && vm.Running && !paused
+	case "move", "pool":
+		// Always offered. Pooling touches nothing, and for a move the preflight
+		// is the authority on whether it can run — it explains every refusal in
+		// one screen, which is more useful than a menu entry quietly missing.
+		return true
 	case "delete":
 		return vm.Capabilities.Delete
 	default:
@@ -210,11 +223,12 @@ type tuiModel struct {
 	list        list.Model
 	actionsList list.Model
 	quitting    bool
-	state       string // "list", "actions", "edit", "hwedit", "confirmDelete", "doctor", "cloneInput", "snapshots", "events"
+	state       string // "list", "actions", "edit", "hwedit", "confirmDelete", "doctor", "cloneInput", "snapshots", "events", "pools"
 	// snapshots and events are the web UI's per-VM tabs as states of this
 	// model — see cmd/tui_views.go.
 	snapshots   snapshotsState
 	events      eventsState
+	pools       poolsState
 	selected    types.VM
 	isCT        bool // true when the actions menu / performAction target is selectedCT, not selected
 	selectedCT  ct.CT
@@ -513,6 +527,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.state == "pools" {
+			if msg.String() == "ctrl+c" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			if !m.updatePools(msg) {
+				if m.pools.notice != "" {
+					m.notice, m.noticeKind = m.pools.notice, "ok"
+				}
+				m.refreshList()
+				m.state = "list"
+			}
+			return m, nil
+		}
+
 		if m.state == "snapshots" {
 			if msg.String() == "ctrl+c" {
 				m.quitting = true
@@ -665,6 +694,14 @@ func (m *tuiModel) runSelectedAction() tea.Cmd {
 	case "events":
 		m.events = newEventsState(m.selected)
 		m.state = "events"
+	case "pool":
+		m.pools = newPoolAssignState(m.selected)
+		m.state = "pools"
+	case "move":
+		// Deliberately not "migrate": that verb is the live, same-backend one,
+		// and the two must not be confusable in a menu (ADR-0010).
+		m.pools = newMoveDestinationState(m.selected)
+		m.state = "pools"
 	case "template":
 		m.toggleTemplate()
 		m.refreshList()
@@ -940,6 +977,10 @@ func (m tuiModel) render() string {
 
 	if m.state == "doctor" {
 		return m.doctorView()
+	}
+
+	if m.state == "pools" {
+		return m.poolsView()
 	}
 
 	if m.state == "snapshots" {

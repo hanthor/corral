@@ -156,11 +156,14 @@ func CapabilitiesForBackend(backend string) InstanceCapabilities {
 		// Snapshots: qcow2 internal snapshots via qemu-img. Only while the VM
 		// is stopped and only on a qcow2 disk — the adapter refuses the rest
 		// with a reason, which is a better experience than a hidden tab.
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, VNC: true, Snapshots: true}
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, VNC: true,
+			Metrics: true, Snapshots: true}
 	case "incus":
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true, Snapshots: true}
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, SSH: true, TTY: true,
+			Metrics: true, Snapshots: true}
 	case "libvirt":
-		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true, Snapshots: true}
+		return InstanceCapabilities{Start: true, Stop: true, Delete: true, VNC: true,
+			Metrics: true, Snapshots: true}
 	case "proxmox":
 		// Consoles are declared off deliberately: PVE serves them over its own
 		// websocket and pkg/proxmoxbe can mint the tickets, but no bridge is
