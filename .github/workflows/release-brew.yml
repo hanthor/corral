@@ -6,7 +6,8 @@ name: Bump Homebrew formula
 #
 # Requires a repo/org secret HOMEBREW_TAP_TOKEN: a PAT (or fine-grained token)
 # with contents:write on tuna-os/homebrew-tap. The default GITHUB_TOKEN cannot
-# push to another repository.
+# push to another repository. The job checks the secret is present before it
+# reaches the tap, so a missing one says so instead of arriving as a 401.
 
 on:
   release:
@@ -28,6 +29,28 @@ jobs:
       github.event_name != 'push' ||
       startsWith(github.ref_name, 'v')
     steps:
+      # Without this, an unset secret reaches the tap as an anonymous request
+      # and comes back "401 Bad credentials", which reads like the token is
+      # present but lacks access to tuna-os/homebrew-tap — sending whoever
+      # debugs it to check permissions on a token that was never there. Every
+      # run of this workflow so far (v0.5.0 twice, v0.6.0) failed that way.
+      #
+      # The check is inside `run` rather than in a step-level `if:` because the
+      # secrets context is not available to `if` — the expression would be
+      # silently empty and the guard would never fire.
+      - name: Check HOMEBREW_TAP_TOKEN is set
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$COMMITTER_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set on this repository." \
+                 "The formula bump needs a PAT with contents:write on" \
+                 "tuna-os/homebrew-tap — the default GITHUB_TOKEN cannot push" \
+                 "to another repository. Add the secret, then re-run this" \
+                 "workflow by hand with the tag as input; no re-tagging needed."
+            exit 1
+          fi
+
       - name: Bump corral in tuna-os/homebrew-tap
         uses: mislav/bump-homebrew-formula-action@v4.2
         with:
