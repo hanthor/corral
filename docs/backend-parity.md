@@ -166,7 +166,7 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **volumes** — incus storage volume attach
 - **expand** — incus config device set … size
 - **gpu** — incus config device add … gpu
-- **tags** — instance config user.corral.tag.<name>
+- **tags** — instance config `user.corral.tag.<name>`
 - **ports** — incus config device add … proxy
 
 ### libvirt — 11 gaps
