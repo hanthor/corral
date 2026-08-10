@@ -177,7 +177,7 @@ async function createVM(page, opts) {
     await page.fill('#create-form [name="cloudInit"]', opts.cloudInit);
   }
   await page.click('#create-form button[type="submit"]');
-  await page.waitForFunction(() => !document.querySelector('#create-dialog[open]'), null, { timeout: 20_000 });
+  await expect(page.locator('#create-dialog')).toBeHidden({ timeout: 20_000 });
 }
 
 // Open a VM's detail panel by clicking its row in the tree. The tree refreshes
@@ -263,7 +263,7 @@ test.describe('Corral web UI', () => {
     await expect(page.locator('#create-form [name="instancetype"]')).toBeVisible();
 
     await page.click('#btn-cancel');
-    await page.waitForFunction(() => !document.querySelector('#create-dialog[open]'));
+    await expect(page.locator('#create-dialog')).toBeHidden({ timeout: 20_000 });
   });
 
   // ── 1b. Simple wizard: cards → questions → VM ──────────────────────
@@ -285,7 +285,7 @@ test.describe('Corral web UI', () => {
     await page.fill('#wiz-name', vm);
     await page.click('#wiz-sizes [data-size="s"]');
     await page.click('#wiz-create');
-    await page.waitForFunction(() => !document.querySelector('#create-dialog[open]'), null, { timeout: 20_000 });
+    await expect(page.locator('#create-dialog')).toBeHidden({ timeout: 20_000 });
 
     expect(await waitFor(() => vmExists(vm), 30_000, 2000, `vm ${vm}`)).toBe(true);
     // Small preset → 1 vCPU.
