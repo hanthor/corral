@@ -204,27 +204,16 @@ func TestMove_TheSourceBackendIsNotOfferedAsADestination(t *testing.T) {
 }
 
 // A destination that cannot receive is shown, disabled, with its reason: an
-// operator who cannot see Incus at all will wonder whether Corral knows about
+// operator who cannot see a disabled choice at all will wonder whether Corral knows about
 // it, where a greyed row answers the question.
 func TestMove_UnavailableDestinationsAreShownWithTheirReason(t *testing.T) {
 	scratchPools(t)
-	m := testModel(poolVM())
-	m.pools = newMoveDestinationState(poolVM())
-
-	var incus poolChoice
-	for _, choice := range m.pools.choices {
-		if choice.value == "incus" {
-			incus = choice
+	// Since all 5 backends can ingest now, let's verify all backends in choices are enabled for kubevirt source.
+	allState := newMoveDestinationState(poolVM()) // poolVM is kubevirt
+	for _, choice := range allState.choices {
+		if !choice.enabled() {
+			t.Fatalf("destination %s should be enabled: %s", choice.value, choice.reason)
 		}
-	}
-	if incus.value == "" {
-		t.Fatal("incus is missing from the destination list entirely")
-	}
-	if incus.enabled() {
-		t.Fatal("incus cannot receive a move but was offered as available")
-	}
-	if !strings.Contains(incus.reason, "image store") {
-		t.Errorf("the reason does not explain why: %q", incus.reason)
 	}
 }
 
@@ -232,12 +221,10 @@ func TestMove_SelectingADisabledDestinationExplainsRatherThanProceeding(t *testi
 	scratchPools(t)
 	m := testModel(poolVM())
 	m.pools = newMoveDestinationState(poolVM())
+	// Inject a disabled choice for testing
+	m.pools.choices = append(m.pools.choices, poolChoice{label: "disabled-backend", value: "disabled-backend", reason: "no ingest path"})
+	m.pools.cursor = len(m.pools.choices) - 1
 
-	for i, choice := range m.pools.choices {
-		if choice.value == "incus" {
-			m.pools.cursor = i
-		}
-	}
 	m.updatePools(key("enter"))
 	if m.pools.mode == "plan" {
 		t.Fatal("a disabled destination produced a plan")

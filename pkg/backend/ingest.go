@@ -201,6 +201,17 @@ func (a proxmoxAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) 
 // create path sets when asked.
 func (proxmoxAdapter) AcceptsUEFI() bool { return true }
 
+// ── incus ─────────────────────────────────────────────────────────
+
+// Ingest publishes a local disk image as a temporary Incus VM image, launches an
+// Incus VM from it, and deletes the temporary image.
+func (a incusAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) error {
+	return a.client.IngestVM(ref.Name, disk, shape.CPU, shape.Mem)
+}
+
+// AcceptsUEFI: Incus VMs always boot using OVMF (UEFI).
+func (incusAdapter) AcceptsUEFI() bool { return true }
+
 // ── the ones that cannot, and why ─────────────────────────────────
 //
 // These are deliberately *not* Ingester implementations: a stub that returned
@@ -215,15 +226,6 @@ func IngestRefusal(backend string) string {
 		return ""
 	}
 	switch backend {
-	case "incus":
-		// Assessed in pkg/bootc and unchanged here: an Incus VM boots from
-		// Incus's own image store, `incus import` takes an Incus backup tarball
-		// rather than a disk image, and a raw disk attached to an --empty VM
-		// leaves the guest without the agent and config drive. The result would
-		// look like it worked and behave unlike every other Incus instance.
-		return "an Incus VM boots from Incus's own image store and has no supported way to adopt " +
-			"a foreign disk; Incus is a move source (its export adapter produces a qcow2 of the " +
-			"boot disk) but not a destination (see ADR-0010)"
 	default:
 		return fmt.Sprintf("the %s backend has no ingest path", backend)
 	}

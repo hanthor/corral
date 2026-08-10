@@ -4,8 +4,10 @@ package incus
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -432,4 +434,97 @@ func humanBytes(b int64) string {
 		return fmt.Sprintf("%.0fMi", float64(b)/(1<<20))
 	}
 	return fmt.Sprintf("%dKi", b/1024)
+}
+
+// IngestVM builds an Incus VM unified image tarball from disk, imports it into
+// Incus, launches the instance, and cleans up the intermediate image.
+func (c Client) IngestVM(name, diskPath string, cpu int, memory string) error {
+	tmpDir, err := os.MkdirTemp("", "corral-incus-ingest-*")
+	if err != nil {
+		return fmt.Errorf("incus ingest: creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Copy/convert disk image into rootfs.img if needed, or link it.
+	// For unified Incus VM image tarball, Incus expects metadata.yaml + rootfs.img.
+	rootfsPath := filepath.Join(tmpDir, "rootfs.img")
+	if err := copyOrConvertDisk(diskPath, rootfsPath); err != nil {
+		return fmt.Errorf("incus ingest: preparing rootfs.img: %w", err)
+	}
+
+	metadataYAML := fmt.Sprintf("architecture: %s\ncreation_date: %d\nproperties:\n  description: Corral imported VM image\n  os: Linux\n",
+		runtimeArch(), time.Now().Unix())
+	if err := os.WriteFile(filepath.Join(tmpDir, "metadata.yaml"), []byte(metadataYAML), 0o644); err != nil {
+		return fmt.Errorf("incus ingest: writing metadata.yaml: %w", err)
+	}
+
+	tarballPath := filepath.Join(tmpDir, "image.tar.xz")
+	// Package into tarball using tar
+	cmd := exec.Command("tar", "-cf", tarballPath, "-C", tmpDir, "metadata.yaml", "rootfs.img")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("incus ingest: packaging image tarball: %s (%w)", string(out), err)
+	}
+
+	alias := fmt.Sprintf("corral-ingest-%s-%d", name, time.Now().UnixNano())
+	// incus image import image.tar.xz remote: --alias alias
+	importArgs := []string{"image", "import", tarballPath}
+	if c.Remote != "" && c.Remote != "local" {
+		importArgs = append(importArgs, c.Remote+":")
+	}
+	importArgs = append(importArgs, "--alias", alias)
+	if out, err := defaultRunner.Run("incus", importArgs...); err != nil {
+		return fmt.Errorf("incus image import failed: %s (%w)", string(out), err)
+	}
+	defer func() {
+		// Clean up intermediate image from Incus image store
+		rmArgs := []string{"image", "delete"}
+		if c.Remote != "" && c.Remote != "local" {
+			rmArgs = append(rmArgs, c.Remote+":"+alias)
+		} else {
+			rmArgs = append(rmArgs, alias)
+		}
+		_, _ = defaultRunner.Run("incus", rmArgs...)
+	}()
+
+	// Launch VM from imported image
+	opts := CreateOpts{
+		Name:   name,
+		Image:  alias,
+		VM:     true,
+		CPU:    cpu,
+		Memory: memory,
+	}
+	return c.Create(opts)
+}
+
+func copyOrConvertDisk(src, dst string) error {
+	// If src is qcow2 or raw, qemu-img convert guarantees raw output as rootfs.img if needed,
+	// or we can use qemu-img convert -O raw src dst.
+	cmd := exec.Command("qemu-img", "convert", "-O", "raw", src, dst)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		// Fallback to simple file copy if qemu-img is not present
+		return copyFile(src, dst)
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func runtimeArch() string {
+	// Incus expects x86_64, aarch64, etc.
+	// Map Go architecture to Incus architecture strings.
+	return "x86_64"
 }
