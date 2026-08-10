@@ -58,14 +58,14 @@ working instance on the destination and left a stopped one behind is a good
 outcome; one that deleted the source and failed to ingest is unrecoverable. The
 default therefore leaves both, and the surfaces say so.
 
-### Supported pairs, and the one that is not
+### Supported pairs
 
 | From ↓ To → | qemu | libvirt | kubevirt | proxmox | incus |
 |---|---|---|---|---|---|
-| **qemu** | — | yes | yes | yes¹ | **no** |
-| **libvirt** | yes | — | yes | yes¹ | **no** |
-| **kubevirt** | yes | yes | — | yes¹ | **no** |
-| **proxmox** | yes | yes | yes | — | **no** |
+| **qemu** | — | yes | yes | yes¹ | **yes** |
+| **libvirt** | yes | — | yes | yes¹ | **yes** |
+| **kubevirt** | yes | yes | — | yes¹ | **yes** |
+| **proxmox** | yes | yes | yes | — | **yes** |
 | **incus (VM)** | yes | yes | yes | yes¹ | — |
 
 ¹ Proxmox as a *destination* needs a disk-ingest path; see below.
@@ -74,14 +74,7 @@ This table is the intended end state. **What is wired today is narrower**, and
 the code refuses everything else rather than approximating it — see *First
 slice* below for exactly which cells are live.
 
-**Incus cannot be a destination.** `bootc.TargetFor` already assessed this and
-refused, and the reasoning holds unchanged: an Incus VM boots from Incus's own
-image store, `incus import` takes an Incus backup tarball rather than a disk
-image, and attaching a raw disk to an `--empty` VM leaves the guest without the
-agent, config drive, and metadata Incus expects — *"the result would look like
-it worked and then behave unlike every other Incus instance."* The honest path
-is Incus image publishing, which is a separate feature. Incus remains a fine
-**source**, because exporting the VM's disk out of it works.
+**Incus is a move destination via Image Publishing.** `Incus` ingests disks by creating an Incus VM image (with `metadata.yaml` and `rootfs.img`), importing it via `incus image import`, launching the VM instance, and deleting the temporary image. If `incus-agent` is not pre-installed in the source guest image, it will not be present in the target instance, and this omission is explicitly recorded in the move's `Dropped` list.
 
 **Containers are not in this graph at all.** An Incus LXC container and a
 pet-pod CT have no disk image — they are a rootfs and a PVC. Turning one into a
@@ -169,14 +162,14 @@ and move share one ingest path rather than growing a second.
 ## First slice: what is actually wired
 
 `pkg/move` and `corral move` exist, and every cell the table above promises is
-now wired except the Incus destination, which is refused by design:
+now wired:
 
 | From ↓ To → | qemu | libvirt | kubevirt | proxmox | incus |
 |---|---|---|---|---|---|
-| **kubevirt** | **yes** | **yes** | — | **yes** | no |
-| **qemu** | — | **yes** | **yes** | **yes** | no |
-| **libvirt** | **yes** | — | **yes** | **yes** | no |
-| **proxmox** | no¹ | no¹ | no¹ | — | no |
+| **kubevirt** | **yes** | **yes** | — | **yes** | **yes** |
+| **qemu** | — | **yes** | **yes** | **yes** | **yes** |
+| **libvirt** | **yes** | — | **yes** | **yes** | **yes** |
+| **proxmox** | no¹ | no¹ | no¹ | — | **yes** |
 | **incus (VM)** | **yes** | **yes** | **yes** | **yes** | — |
 
 ¹ Proxmox as a *source* needs an export adapter, which `pkg/export` does not
@@ -185,30 +178,25 @@ have yet. It is a destination, not yet a source — the mirror image of Incus.
 Two things narrow it beyond what the ADR anticipated, each with a refusal that
 names the reason:
 
-- **The four ingest paths, and what each costs.** qemu and libvirt delegate to
+- **The five ingest paths, and what each costs.** qemu and libvirt delegate to
   the `bootc.Target` that already puts a disk onto them, so a bootc disk and a
   moved disk land the same way. KubeVirt uploads through CDI (`virtctl
   image-upload` creates the DataVolume, and the VM then adopts the resulting
   PVC as its boot disk — `PVC`, never `ImportURL`, since the disk is already in
   the cluster). Proxmox uploads to a storage advertising the `import` content
   type and creates with `import-from`; where no such storage exists it refuses
-  with the three ways forward, which is the bend in ADR-0009 described below.
+  with the three ways forward. Incus publishes an Incus VM image (`metadata.yaml`
+  + `rootfs.img`), imports it via `incus image import`, launches the VM, and
+  removes the temporary image.
 - **Firmware travels now.** A UEFI guest was previously refused everywhere but
-  libvirt. KubeVirt sets `firmware.bootloader.efi` and PVE sets `bios: ovmf`
-  plus an `efidisk0`, so only qemu — whose generated systemd unit has no OVMF
-  path — still refuses one. Secure Boot stays off on both: it needs an EFI vars
+  libvirt. KubeVirt sets `firmware.bootloader.efi`, PVE sets `bios: ovmf`
+  plus an `efidisk0`, and Incus is OVMF-only, so only qemu — whose generated systemd unit has no OVMF
+  path — still refuses one. Secure Boot stays off: it needs an EFI vars
   volume and a signed bootloader, and enabling it silently would break exactly
   the imported guests this serves.
-- **Incus is a source, not a destination.** `pkg/export`'s Incus adapter grew a
-  `qcow2` format for this: it exports the instance archive to scratch, pulls
-  `backup/virtual-machine.img` out of it, and converts. Going through the
-  archive rather than the storage pool is deliberate — the pool layout differs
-  per driver, usually needs root, and is not reachable at all for a remote
-  instance, while `incus export` works the same way everywhere and over the
-  network. The archive stays the *native* format, because it is the right
-  artifact for a backup (configuration and every volume) where the qcow2 is only
-  the boot disk. A container archive has no such member, and the refusal says
-  so in those words rather than failing later inside `qemu-img`.
+- **Incus is both a source and a destination.** `pkg/export`'s Incus adapter grew a
+  `qcow2` format for exporting boot disks. For ingest, Incus publishes an image from
+  the imported disk and launches the VM.
 - **Only qcow2 is ingested.** `raw.gz` is a disk, but a compressed one, and the
   ingest path hands the file to `qemu-img convert`, which does not read gzip.
   Every backend that can export offers qcow2, so nothing is lost by naming the

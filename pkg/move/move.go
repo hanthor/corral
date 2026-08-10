@@ -355,6 +355,9 @@ func droppedConfig(src Source, to types.InstanceRef) []string {
 	if len(src.VM.Tags) > 0 && to.Backend == "qemu" {
 		dropped = append(dropped, "tags (the qemu backend has nowhere to record them)")
 	}
+	if to.Backend == "incus" {
+		dropped = append(dropped, "incus-agent (foreign disk image imported as Incus image does not include incus-agent)")
+	}
 	return dropped
 }
 

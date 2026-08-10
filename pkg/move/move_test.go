@@ -42,8 +42,8 @@ type stub struct {
 func newStub(t *testing.T) *stub {
 	t.Helper()
 	s := &stub{
-		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true},
-		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true},
+		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": true},
+		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true, "incus": true},
 		formats: map[string][]export.Format{
 			"kubevirt": {export.RawGz, export.Qcow2},
 			"qemu":     {export.Qcow2, export.RawGz},
@@ -218,12 +218,15 @@ func TestPreflightRefusesContainers(t *testing.T) {
 	mustRefuse(t, Preflight(src, to("qemu")), "containers cannot be moved")
 }
 
-func TestPreflightRefusesIncusAsADestination(t *testing.T) {
+func TestPreflightAllowsIncusAsADestination(t *testing.T) {
 	newStub(t)
 	plan := Preflight(sourceVM(), to("incus"))
-	mustRefuse(t, plan, "cannot receive a moved instance")
-	if !strings.Contains(refusalText(plan), "stub: incus") {
-		t.Errorf("the refusal should carry the backend's own explanation, got:\n%s", refusalText(plan))
+	if !plan.OK() {
+		t.Fatalf("incus as a destination should be allowed:\n%s", refusalText(plan))
+	}
+	joined := strings.Join(plan.Dropped, "\n")
+	if !strings.Contains(joined, "incus-agent") {
+		t.Errorf("dropped config should state that incus-agent is not present, got:\n%s", joined)
 	}
 }
 
@@ -487,7 +490,7 @@ func TestExecuteDeletesTheSourceOnlyWhenAsked(t *testing.T) {
 
 func TestExecuteRefusesToRunARefusedPlan(t *testing.T) {
 	s := newStub(t)
-	plan := Preflight(sourceVM(), to("incus"))
+	plan := Preflight(sourceVM(), to("vmware"))
 	if _, err := Execute(context.Background(), plan, nil); err == nil {
 		t.Fatal("Execute must not run a plan preflight refused")
 	}
@@ -603,11 +606,8 @@ func TestRealSeamsAreWiredToTheRealPackages(t *testing.T) {
 	if !canIngest("qemu") {
 		t.Error("qemu implements backend.Ingester, so the real canIngest should say so")
 	}
-	if canIngest("incus") {
-		t.Error("incus deliberately does not implement Ingester")
-	}
-	if ingestReason("incus") == "" {
-		t.Error("and the absence must come with an explanation")
+	if !canIngest("incus") {
+		t.Error("incus implements Ingester via image publishing")
 	}
 	if got := formatsFor("kubevirt"); len(got) == 0 {
 		t.Error("the real export.Formats should answer for kubevirt")
@@ -618,8 +618,7 @@ func TestRealSeamsAreWiredToTheRealPackages(t *testing.T) {
 }
 
 // TestPairsMatchTheADR pins the supported-pairs table to the code, so the two
-// cannot drift silently. It reflects the first slice: qemu and libvirt are the
-// only destinations wired, which ADR-0010 records.
+// cannot drift silently. It reflects the supported pairs in ADR-0010.
 func TestPairsMatchTheADR(t *testing.T) {
 	s := newStub(t)
 	// Real capability answers, stubbed free space: whether /tmp happens to hold
@@ -629,7 +628,7 @@ func TestPairsMatchTheADR(t *testing.T) {
 	_ = s
 
 	sources := []string{"kubevirt", "qemu", "libvirt", "incus"}
-	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": false}
+	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": true}
 
 	for _, from := range sources {
 		for dst, want := range destinations {
