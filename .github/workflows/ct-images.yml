@@ -38,9 +38,12 @@ jobs:
       - name: Push
         if: github.event_name != 'pull_request'
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ env.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           IMG="ghcr.io/${{ github.repository_owner }}/ct-debian"
           docker tag ct-debian:test "$IMG:latest"
           docker tag ct-debian:test "$IMG:${GITHUB_SHA::7}"
           docker push "$IMG:latest"
           docker push "$IMG:${GITHUB_SHA::7}"
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
