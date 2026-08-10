@@ -49,6 +49,7 @@ func newStub(t *testing.T) *stub {
 			"qemu":     {export.Qcow2, export.RawGz},
 			"libvirt":  {export.Qcow2, export.RawGz},
 			"incus":    {export.IncusTar, export.Qcow2},
+			"proxmox":  {export.Vzdump},
 		},
 		free: 1 << 40,
 	}
@@ -252,11 +253,11 @@ func TestPreflightRefusesASourceWhoseExportIsNotADisk(t *testing.T) {
 	mustRefuse(t, Preflight(src, to("qemu")), "not a disk image")
 }
 
-func TestPreflightRefusesABackendThatCannotExport(t *testing.T) {
+func TestPreflightRefusesProxmoxNativeArchiveAsSource(t *testing.T) {
 	newStub(t)
 	src := sourceVM()
-	src.VM.Backend = "proxmox" // not in export.Supported today
-	mustRefuse(t, Preflight(src, to("qemu")), "cannot export a disk")
+	src.VM.Backend = "proxmox"
+	mustRefuse(t, Preflight(src, to("qemu")), "not a disk image")
 }
 
 func TestPreflightRefusesUEFIOntoABIOSOnlyDestination(t *testing.T) {

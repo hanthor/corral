@@ -48,6 +48,8 @@ const (
 	// IncusTar is Incus's own instance archive — configuration and volumes,
 	// restorable only with `incus import`.
 	IncusTar Format = "incus-tar"
+	// Vzdump is Proxmox's native VM/CT backup archive. It is not a disk image.
+	Vzdump Format = "vzdump"
 )
 
 // Request is one export.
@@ -130,6 +132,8 @@ func For(ref types.InstanceRef) (Adapter, error) {
 		return Libvirt{}, nil
 	case "incus":
 		return Incus{}, nil
+	case "proxmox":
+		return Proxmox{}, nil
 	case "":
 		return nil, fmt.Errorf("instance reference has no backend; export needs a fully-scoped instance")
 	default:
@@ -141,7 +145,7 @@ func For(ref types.InstanceRef) (Adapter, error) {
 // touching the instance — for capability reporting and UI gating.
 func Supported(backend string) bool {
 	switch backend {
-	case "kubevirt", "qemu", "libvirt", "incus":
+	case "kubevirt", "qemu", "libvirt", "incus", "proxmox":
 		return true
 	}
 	return false

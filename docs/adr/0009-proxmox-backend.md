@@ -33,7 +33,10 @@ introduces.
 ### Transport: the HTTPS API with an API token
 
 `https://{host}:8006/api2/json` with an `Authorization: PVEAPIToken=…` header.
-Not `pvesh` over SSH, and not ticket-plus-CSRF login:
+Not `pvesh` over SSH for normal backend operations, and not ticket-plus-CSRF
+login. Export is the one narrow exception: PVE's documented `vzdump
+--stdout` mode is CLI-only, so the export adapter uses the API for identity and
+status, then SSH only to the owning node for the archive byte stream:
 
 - Every other backend shells out to a CLI because that CLI *is* the supported
   interface (`kubectl`, `virtctl`, `incus`, `virsh`). Proxmox's supported
@@ -44,6 +47,10 @@ Not `pvesh` over SSH, and not ticket-plus-CSRF login:
   runner. The `shell.Runner` seam does not apply, so the backend takes an
   `http.RoundTripper` seam instead, and tests use `httptest` the way `pkg/web`'s
   do.
+- The export exception is intentionally limited to `vzdump --stdout`; it does
+  not turn SSH into a second control-plane transport. The node must be
+  reachable by SSH as `root`, or the user can set
+  `CORRAL_PROXMOX_SSH_USER`/`CORRAL_PROXMOX_SSH_HOST` for the stream.
 
 Self-signed certificates are the norm on PVE. The context configuration carries
 either a pinned certificate fingerprint or an explicit
@@ -110,7 +117,7 @@ SPICE is out of scope: no browser client Corral can drive.
 | CPU / memory | `POST …/config` with `cores`/`memory`; hotplug where the guest has it enabled, restart otherwise — the same honest note the hardware form already shows |
 | Disks | `POST …/config` with `scsiN`, `PUT …/resize`, `unlink` to remove |
 | GPU | `POST …/config` with `hostpciN` |
-| Export / backup | `POST /nodes/{n}/vzdump` then download from the storage — mapping to the existing export task and its progress reporting |
+| Export / backup | `vzdump {vmid} --mode snapshot --stdout --compress zstd` over SSH to the owning node — the REST API restricts stdout mode to the node CLI; mapped to the native `vzdump` archive in `pkg/export` |
 | Tags | the config's own `tags` field, comma-separated — native, unlike the label emulation elsewhere |
 | Events | `GET /nodes/{n}/tasks` plus `GET /nodes/{n}/tasks/{upid}/log` |
 | Metrics | `GET …/status/current` for the instant, `GET …/rrddata?timeframe=hour` for the CPU sparkline the web UI already draws |

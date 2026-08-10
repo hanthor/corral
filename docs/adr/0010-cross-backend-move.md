@@ -176,11 +176,8 @@ now wired except the Incus destination, which is refused by design:
 | **kubevirt** | **yes** | **yes** | — | **yes** | no |
 | **qemu** | — | **yes** | **yes** | **yes** | no |
 | **libvirt** | **yes** | — | **yes** | **yes** | no |
-| **proxmox** | no¹ | no¹ | no¹ | — | no |
+| **proxmox** | **yes** | **yes** | **yes** | — | no |
 | **incus (VM)** | **yes** | **yes** | **yes** | **yes** | — |
-
-¹ Proxmox as a *source* needs an export adapter, which `pkg/export` does not
-have yet. It is a destination, not yet a source — the mirror image of Incus.
 
 Two things narrow it beyond what the ADR anticipated, each with a refusal that
 names the reason:

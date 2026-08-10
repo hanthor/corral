@@ -12,6 +12,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/proxmoxbe"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/snapshot"
 	"github.com/tuna-os/corral/pkg/types"
@@ -257,6 +258,52 @@ func isRemoteURI(uri string) bool {
 // than being labelled qcow2 and disappointing whoever tries to boot it.
 
 type Incus struct{}
+
+// ── Proxmox ──────────────────────────────────────────────────────
+//
+// vzdump is a native PVE backup archive, not a disk image. The backend creates
+// it in snapshot mode and streams it from the owning node over SSH. PVE's REST
+// API can start a vzdump task but restricts stdout mode to the node CLI, so
+// this is the narrow, explicit SSH exception documented by ADR-0009. The API
+// token still resolves the guest and node; SSH is only used for archive bytes.
+
+type Proxmox struct{}
+
+func (Proxmox) Formats() []Format { return []Format{Vzdump} }
+
+func (p Proxmox) Export(ctx context.Context, req Request, progress ProgressFunc) (Result, error) {
+	format, err := pickFormat("proxmox", req.Format, p.Formats())
+	if err != nil {
+		return Result{}, err
+	}
+	if err := ensureDestDir(req.Dest); err != nil {
+		return Result{}, err
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+	client, err := proxmoxbe.ClientForContext(req.Ref.Context)
+	if err != nil {
+		return Result{}, err
+	}
+	guest, err := client.Resolve(req.Ref.Name)
+	if err != nil {
+		return Result{}, err
+	}
+	status, err := client.Status(req.Ref.Name)
+	if err != nil {
+		return Result{}, err
+	}
+	progress.report("streaming vzdump archive", 0, 0)
+	if err := client.ExportVzdump(ctx, guest, req.Dest); err != nil {
+		return Result{}, err
+	}
+	consistency := snapshot.Offline
+	if status.Status == "running" {
+		consistency = snapshot.Crash
+	}
+	return finish(req.Dest, format, consistency)
+}
 
 // Formats: the native archive first, then qcow2 for a VM.
 //
