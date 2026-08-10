@@ -1,9 +1,11 @@
 # RFC-0001: VDI plugin — Windows/Linux desktop pools on Corral
 
 **Status:** Phases 0 and 1 implemented. Browser RDP via IronRDP/RDCleanPath
-and the `corral-vdi` static-pool CLI are shipped. Phases 2–4 remain a
-design proposal; this RFC defines their corrected scope but does not commit
-their implementation. Setup guide: [docs/vdi.md](../vdi.md).
+and the `corral-vdi` static-pool CLI are shipped. Manual assignment now uses
+a Kubernetes Lease as an atomic claim gate; authenticated self-service,
+session tracking, and reclaim remain Phase 2 work. Phases 2–4 otherwise
+remain a design proposal; this RFC defines their corrected scope but does
+not commit their implementation. Setup guide: [docs/vdi.md](../vdi.md).
 **Date:** 2026-07-02
 **Updated:** 2026-07-29
 **Author:** grilled out of a live session with James Reilly + Claude
@@ -132,7 +134,9 @@ therefore use the same one-click browser experience as VNC desktops.
 *already-built* VM (built the normal way — `corral bootc`/`corral-windows`/
 `corral create` — then customized and stopped) N times via
 `kubevirt.Client.Clone`, labeled as pool members. `corral vdi assign <pool>
-<user>` hand-wires a claim (a K8s label/annotation, nothing fancier).
+<user>` acquires a per-member Kubernetes Lease before writing the claim
+label/annotation, preventing concurrent CLI processes from receiving the
+same desktop. The labels remain the presentation state used by Phase 1.
 `corral vdi connect <member>` prints the existing VNC/RDP/SSH paths for
 that member. Full setup guide: [docs/vdi.md](../vdi.md).
 
@@ -147,12 +151,11 @@ once the target VM actually exists — `CreatePool` originally raced ahead
 and tried to label a VM that didn't exist yet on a real cluster. Fixed
 with a poll-wait (`waitForVM`, 2min timeout) between clone and label.
 
-**Phase 2 — atomic self-service claims, sessions, and reclaim. Proposed.**
+**Phase 2 — self-service claims, sessions, and reclaim. Proposed.**
 An authenticated user hits "Get a desktop," atomically claims an available
 member, powers it on if necessary, and is redirected to the best reachable
-console. Claim creation must be compare-and-swap safe; the existing
-list-then-label Phase 1 implementation is not sufficient under concurrent
-requests.
+console. The CLI's Lease-backed claim gate provides the atomic primitive; the
+remaining work is broker authentication, session tracking, and reclaim.
 
 The first reclaim policy is deliberately conservative:
 

@@ -131,6 +131,7 @@ func TestAssign_ClaimsFirstFreeMemberAndStartsIfStopped(t *testing.T) {
 		{"metadata":{"name":"devpool-2","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool"}},
 			"status":{"printableStatus":"Stopped"}}
 	]}`, nil)
+	fake.AddResponseKV("kubectl", []string{"create", "lease", leaseName("devpool-2"), "-n", "corral-vms", "--field-manager=corral-vdi"}, "created", nil)
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelPool + "=devpool", "--overwrite"}, "", nil)
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelAssignedTo + "=alice", "--overwrite"}, "", nil)
 	fake.AddPrefixResponse("kubectl annotate vm devpool-2 -n corral-vms corral.dev/vdi-claimed-at=", "", nil)
@@ -177,6 +178,29 @@ func TestAssign_PoolNotFound(t *testing.T) {
 	}
 }
 
+func TestAcquireLease_AlreadyExistsIsNotAnError(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"create", "lease", leaseName("devpool-1"), "-n", "corral-vms", "--field-manager=corral-vdi"}, "AlreadyExists", &fakeErr{"already exists"})
+
+	claimed, err := acquireLease("corral-vms", "devpool-1")
+	if err != nil {
+		t.Fatalf("acquireLease returned error for an existing lease: %v", err)
+	}
+	if claimed {
+		t.Fatal("acquireLease reported a lease was claimed when it already existed")
+	}
+}
+
+func TestAcquireLease_ReportsUnexpectedFailure(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"create", "lease", leaseName("devpool-1"), "-n", "corral-vms", "--field-manager=corral-vdi"}, "forbidden", &fakeErr{"forbidden"})
+
+	claimed, err := acquireLease("corral-vms", "devpool-1")
+	if err == nil || claimed {
+		t.Fatalf("acquireLease = (%v, %v), want false and an error", claimed, err)
+	}
+}
+
 func TestUnassign_ClearsLabelAndStops(t *testing.T) {
 	fake := withFake(t)
 	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-2", "-n", "corral-vms", "-o",
@@ -184,6 +208,7 @@ func TestUnassign_ClearsLabelAndStops(t *testing.T) {
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelPool + "=devpool", "--overwrite"}, "", nil)
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelAssignedTo + "-", "--overwrite"}, "", nil)
 	fake.AddResponseKV("kubectl", []string{"annotate", "vm", "devpool-2", "-n", "corral-vms", annoClaimedAt + "-", "--overwrite"}, "", nil)
+	fake.AddResponseKV("kubectl", []string{"delete", "lease", leaseName("devpool-2"), "-n", "corral-vms", "--ignore-not-found"}, "", nil)
 	fake.AddResponseKV("/fake/bin/virtctl", []string{"stop", "devpool-2", "-n", "corral-vms"}, "", nil)
 
 	if err := Unassign("corral-vms", "devpool-2"); err != nil {

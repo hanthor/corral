@@ -22,6 +22,7 @@ const (
 	labelPool       = "corral.dev/vdi-pool"
 	labelAssignedTo = "corral.dev/vdi-assigned-to"
 	annoClaimedAt   = "corral.dev/vdi-claimed-at"
+	leasePrefix     = "corral-vdi-"
 )
 
 // cloneWaitTimeout and clonePollInterval are vars (not consts) so tests can
@@ -144,6 +145,30 @@ func labelMember(ns, name, pool, assignedTo string) error {
 	return err
 }
 
+func leaseName(member string) string { return leasePrefix + member }
+
+// acquireLease makes assignment concurrency-safe across separate CLI
+// processes. Kubernetes object creation is atomic: only one claimant can
+// create the member's Lease, while a failed create means another claimant won
+// the race. The user label is still the presentation/source-of-truth state
+// used by Phase 1, but the Lease is the claim gate for concurrent callers.
+func acquireLease(namespace, member string) (bool, error) {
+	out, err := run("kubectl", "create", "lease", leaseName(member), "-n", namespace, "--field-manager=corral-vdi")
+	if err == nil {
+		return true, nil
+	}
+	message := strings.ToLower(string(out) + " " + err.Error())
+	if strings.Contains(message, "already exists") || strings.Contains(message, "alreadyexists") {
+		return false, nil
+	}
+	return false, fmt.Errorf("claiming lease for %s: %w", member, err)
+}
+
+func releaseLease(namespace, member string) error {
+	_, err := run("kubectl", "delete", "lease", leaseName(member), "-n", namespace, "--ignore-not-found")
+	return err
+}
+
 type vmListItem struct {
 	Metadata struct {
 		Name        string            `json:"name"`
@@ -231,15 +256,32 @@ func Assign(namespace, pool, user string) (string, error) {
 		return "", fmt.Errorf("pool %q not found (or has no members) in ns/%s", pool, namespace)
 	}
 	for _, v := range items {
+		if v.Metadata.Namespace != "" && v.Metadata.Namespace != namespace {
+			continue
+		}
 		if v.Metadata.Labels[labelAssignedTo] != "" {
 			continue
 		}
 		name := v.Metadata.Name
-		if err := labelMember(namespace, name, pool, user); err != nil {
+		memberNamespace := namespace
+		if v.Metadata.Namespace != "" {
+			memberNamespace = v.Metadata.Namespace
+		}
+		claimed, err := acquireLease(memberNamespace, name)
+		if err != nil {
+			return "", err
+		}
+		if !claimed {
+			// Another process won the race for this free-looking member. Try
+			// the next member before reporting that the pool is full.
+			continue
+		}
+		if err := labelMember(memberNamespace, name, pool, user); err != nil {
+			_ = releaseLease(memberNamespace, name)
 			return "", err
 		}
 		if v.Status.PrintableStatus != "Running" {
-			if err := kubevirt.NewClient(namespace).StartVM(name); err != nil {
+			if err := kubevirt.NewClient(memberNamespace).StartVM(name); err != nil {
 				return "", fmt.Errorf("assigned %s but failed to start it: %w", name, err)
 			}
 		}
@@ -254,6 +296,9 @@ func Assign(namespace, pool, user string) (string, error) {
 func Unassign(namespace, member string) error {
 	if err := labelMember(namespace, member, poolOf(namespace, member), ""); err != nil {
 		return err
+	}
+	if err := releaseLease(namespace, member); err != nil {
+		return fmt.Errorf("releasing lease for %s: %w", member, err)
 	}
 	return kubevirt.NewClient(namespace).StopVM(member)
 }
@@ -279,6 +324,9 @@ func DeletePool(namespace, pool string) error {
 	client := kubevirt.NewClient(namespace)
 	var firstErr error
 	for _, v := range items {
+		if err := releaseLease(v.Metadata.Namespace, v.Metadata.Name); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		if err := client.DeleteVM(v.Metadata.Name); err != nil && firstErr == nil {
 			firstErr = err
 		}

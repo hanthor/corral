@@ -134,6 +134,10 @@ already gives Linux members. Until then:
 
 - **No self-serve.** Assignment is a CLI/admin action — there's no
   end-user "get a desktop" page yet.
+- **Assignment is still operator-driven, but claims are concurrency-safe.**
+  `corral vdi assign` acquires a Kubernetes Lease before writing the member
+  labels, so simultaneous CLI invocations cannot claim the same desktop. A
+  broker or authenticated self-serve page is still Phase 2 work.
 - **No idle/logout reclaim.** Unassigned-but-still-running members don't
   happen (unassign always stops), but there's nothing that notices "alice
   hasn't touched devpool-1 in 3 hours" and reclaims it automatically.
