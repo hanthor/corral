@@ -254,7 +254,6 @@ func TestPreflightRefusesASourceWhoseExportIsNotADisk(t *testing.T) {
 }
 
 func TestPreflightAllowsProxmoxAsExportSource(t *testing.T) {
-	s := newStub(t)
 	src := sourceVM()
 	src.VM.Backend = "proxmox"
 	plan := Preflight(src, to("qemu"))
