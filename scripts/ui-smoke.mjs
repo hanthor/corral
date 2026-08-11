@@ -126,13 +126,13 @@ check(await page.locator('#tree >> text=Pools').count() > 0, 'Pool View renders 
 check(await page.locator('#tree >> text=Unassigned').count() > 0, 'Pool View lists unassigned instances');
 check(await page.locator('#tree >> text=Move to backend').count() > 0, 'Pool View offers backends as drop targets');
 
-// Backends that cannot receive a move are inert with the reason on hover,
-// rather than accepting a drop and refusing it afterwards.
-const incusTarget = page.locator('.tree-item.disabled', { hasText: 'incus' }).first();
-check(await incusTarget.count() > 0, 'incus is shown as an unavailable move target');
+// Incus is a move destination now (image-publish Ingester, #164): it is a
+// live drop target, not a greyed-out one.
+const incusTarget = page.locator('.tree-item', { hasText: 'incus' }).first();
+check(await incusTarget.count() > 0, 'incus is shown as a move target');
 check(
-  ((await incusTarget.getAttribute('title')) || '').length > 20,
-  'an unavailable target explains itself on hover',
+  await incusTarget.evaluate((el) => !el.classList.contains('disabled')),
+  'incus is an available move target',
 );
 const qemuTarget = page.locator('#tree .tree-item', { hasText: 'qemu' }).last();
 check(
