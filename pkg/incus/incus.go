@@ -424,6 +424,28 @@ func (c Client) queryTarget(path string) string {
 	return c.Remote + ":" + path
 }
 
+// ImageImport publishes a local disk image as an Incus image. This is the
+// ingest path for a cross-backend move: the disk arrives as a qcow2, is
+// imported into Incus's image store, and a VM is created from the resulting
+// alias (ADR-0010).
+//
+// The alias is returned so the caller can launch from it and later delete it.
+func (c Client) ImageImport(diskPath, alias string) (string, error) {
+	args := []string{"image", "import", diskPath, "--alias", alias}
+	if out, err := defaultRunner.Run("incus", args...); err != nil {
+		return "", fmt.Errorf("incus image import: %s (%w)", string(out), err)
+	}
+	return alias, nil
+}
+
+// DeleteImage removes an image by its fingerprint or alias.
+func (c Client) DeleteImage(alias string) error {
+	if out, err := defaultRunner.Run("incus", "image", "delete", alias); err != nil {
+		return fmt.Errorf("incus image delete %s: %s (%w)", alias, string(out), err)
+	}
+	return nil
+}
+
 func humanBytes(b int64) string {
 	switch {
 	case b >= 1<<30:

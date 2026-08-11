@@ -50,7 +50,7 @@ func localVM(t *testing.T, name string) types.InstanceRef {
 // ── contract ──────────────────────────────────────────────────────
 
 func TestFor_EveryImplementedBackend(t *testing.T) {
-	for _, backend := range []string{"kubevirt", "qemu", "libvirt", "incus"} {
+	for _, backend := range []string{"kubevirt", "qemu", "libvirt", "incus", "proxmox"} {
 		if _, err := For(types.InstanceRef{Backend: backend, Name: "vm"}); err != nil {
 			t.Errorf("no adapter for %q: %v", backend, err)
 		}

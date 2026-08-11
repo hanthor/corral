@@ -203,10 +203,9 @@ func TestMove_TheSourceBackendIsNotOfferedAsADestination(t *testing.T) {
 	}
 }
 
-// A destination that cannot receive is shown, disabled, with its reason: an
-// operator who cannot see Incus at all will wonder whether Corral knows about
-// it, where a greyed row answers the question.
-func TestMove_UnavailableDestinationsAreShownWithTheirReason(t *testing.T) {
+// Incus is a move destination now (image-publish Ingester, #164): it must be
+// offered enabled, not greyed out, so operators can move guests onto it.
+func TestMove_IncusIsAnEnabledDestination(t *testing.T) {
 	scratchPools(t)
 	m := testModel(poolVM())
 	m.pools = newMoveDestinationState(poolVM())
@@ -220,15 +219,12 @@ func TestMove_UnavailableDestinationsAreShownWithTheirReason(t *testing.T) {
 	if incus.value == "" {
 		t.Fatal("incus is missing from the destination list entirely")
 	}
-	if incus.enabled() {
-		t.Fatal("incus cannot receive a move but was offered as available")
-	}
-	if !strings.Contains(incus.reason, "image store") {
-		t.Errorf("the reason does not explain why: %q", incus.reason)
+	if !incus.enabled() {
+		t.Fatalf("incus can receive a move (image-publish destination) but was offered disabled: %q", incus.reason)
 	}
 }
 
-func TestMove_SelectingADisabledDestinationExplainsRatherThanProceeding(t *testing.T) {
+func TestMove_SelectingIncusProceedsToThePlan(t *testing.T) {
 	scratchPools(t)
 	m := testModel(poolVM())
 	m.pools = newMoveDestinationState(poolVM())
@@ -239,11 +235,8 @@ func TestMove_SelectingADisabledDestinationExplainsRatherThanProceeding(t *testi
 		}
 	}
 	m.updatePools(key("enter"))
-	if m.pools.mode == "plan" {
-		t.Fatal("a disabled destination produced a plan")
-	}
-	if m.pools.err == "" {
-		t.Fatal("selecting a disabled destination said nothing")
+	if m.pools.mode != "plan" {
+		t.Fatalf("selecting an enabled destination should produce a plan: mode=%q err=%q", m.pools.mode, m.pools.err)
 	}
 }
 
@@ -252,7 +245,7 @@ func TestMove_SelectingADisabledDestinationExplainsRatherThanProceeding(t *testi
 func TestMovePlan_RefusedPlanOffersNoConfirmation(t *testing.T) {
 	scratchPools(t)
 	vm := poolVM()
-	vm.Backend = "proxmox" // no export adapter, so every move is refused (#163)
+	vm.Backend = "qemu" // a guest cannot be moved onto its own backend
 	m := testModel(vm)
 	m.pools = newMoveDestinationState(vm)
 	m.pools.planMove("qemu")

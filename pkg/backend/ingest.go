@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/tuna-os/corral/pkg/bootc"
+	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
 	"github.com/tuna-os/corral/pkg/proxmoxbe"
 	"github.com/tuna-os/corral/pkg/types"
@@ -201,6 +202,50 @@ func (a proxmoxAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) 
 // create path sets when asked.
 func (proxmoxAdapter) AcceptsUEFI() bool { return true }
 
+// ── incus ─────────────────────────────────────────────────────────
+
+// Ingest publishes the disk as an Incus image and creates a VM from it.
+//
+// An Incus VM boots from Incus's own image store, so a foreign disk must be
+// imported first — `incus image import` reads the qcow2 and registers it
+// under an alias, and the VM is launched from that alias. This is the
+// "image publishing" path the move destination was missing (ADR-0010).
+func (a incusAdapter) Ingest(ref types.InstanceRef, disk string, shape Shape) error {
+	alias := "corral-move-" + ref.Name
+
+	// Import the qcow2 as an Incus image.
+	if _, err := a.client.ImageImport(disk, alias); err != nil {
+		return fmt.Errorf("publishing the disk as an Incus image: %w", err)
+	}
+
+	// Clean up the image alias on failure. A successful launch does not
+	// delete the alias — the image stays in the store so the VM can be
+	// rebuilt if needed.
+	cleanup := func() {
+		_ = a.client.DeleteImage(alias)
+	}
+
+	mem := shape.Mem
+	if mem == "" {
+		mem = "2Gi"
+	}
+	if err := a.client.Create(incus.CreateOpts{
+		Name:   ref.Name,
+		Image:  alias,
+		VM:     true,
+		CPU:    shape.CPU,
+		Memory: mem,
+	}); err != nil {
+		cleanup()
+		return fmt.Errorf("creating Incus VM from the imported disk: %w", err)
+	}
+	return nil
+}
+
+// AcceptsUEFI: Incus VMs boot via UEFI by default, so a UEFI guest has
+// somewhere to land.
+func (incusAdapter) AcceptsUEFI() bool { return true }
+
 // ── the ones that cannot, and why ─────────────────────────────────
 //
 // These are deliberately *not* Ingester implementations: a stub that returned
@@ -214,17 +259,7 @@ func IngestRefusal(backend string) string {
 	if CanIngest(backend) {
 		return ""
 	}
-	switch backend {
-	case "incus":
-		// Assessed in pkg/bootc and unchanged here: an Incus VM boots from
-		// Incus's own image store, `incus import` takes an Incus backup tarball
-		// rather than a disk image, and a raw disk attached to an --empty VM
-		// leaves the guest without the agent and config drive. The result would
-		// look like it worked and behave unlike every other Incus instance.
-		return "an Incus VM boots from Incus's own image store and has no supported way to adopt " +
-			"a foreign disk; Incus is a move source (its export adapter produces a qcow2 of the " +
-			"boot disk) but not a destination (see ADR-0010)"
-	default:
-		return fmt.Sprintf("the %s backend has no ingest path", backend)
-	}
+	// All five backends with adapters now support ingest. When a new backend
+	// is added, list its refusal reason here.
+	return fmt.Sprintf("the %s backend has no ingest path", backend)
 }

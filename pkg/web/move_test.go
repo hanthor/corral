@@ -116,12 +116,12 @@ func TestMovePreflight_RefusalIsA200WithReasons(t *testing.T) {
 	stubMove(t)
 	stubResolver(t, movableVM())
 
-	plan, code := preflight(t, srv, map[string]any{"ref": "kubevirt/prod/default/web-1", "toBackend": "incus"})
+	plan, code := preflight(t, srv, map[string]any{"ref": "kubevirt/prod/default/web-1", "toBackend": "vsphere"})
 	if code != 200 {
 		t.Fatalf("a refusal is an answer, not a failed request; got %d", code)
 	}
 	if plan.OK || len(plan.Refusals) == 0 {
-		t.Fatal("incus cannot receive a move, so the plan should be refused with a reason")
+		t.Fatal("an unknown destination cannot receive a move, so the plan should be refused with a reason")
 	}
 	if plan.Refusals[0].Remedy == "" {
 		t.Error("a refusal without an explanation is a dead end in the dialog")
@@ -161,7 +161,7 @@ func TestMove_RefusesServerSideEvenIfTheClientSkippedPreflight(t *testing.T) {
 
 	var plan planResponse
 	code := postJSON(t, srv, "/api/move",
-		map[string]any{"ref": "kubevirt/prod/default/web-1", "toBackend": "incus"}, &plan)
+		map[string]any{"ref": "kubevirt/prod/default/web-1", "toBackend": "vsphere"}, &plan)
 	if code != 409 {
 		t.Fatalf("a refused commit should be 409, got %d", code)
 	}
@@ -282,21 +282,9 @@ func TestMoveDestinations_SaysWhichBackendsCanReceiveAndWhy(t *testing.T) {
 			reason string
 		}{d.Can, d.Reason}
 	}
-	for _, want := range []string{"qemu", "libvirt", "kubevirt", "proxmox"} {
+	for _, want := range []string{"qemu", "libvirt", "kubevirt", "proxmox", "incus"} {
 		if !byName[want].can {
 			t.Errorf("%s implements Ingester and should be a live drop target", want)
-		}
-	}
-	for _, want := range []string{"incus"} {
-		entry, ok := byName[want]
-		if !ok {
-			t.Fatalf("%s is missing from the destinations list", want)
-		}
-		if entry.can {
-			t.Errorf("%s is not wired as a destination yet", want)
-		}
-		if entry.reason == "" {
-			t.Errorf("a greyed-out drop target needs a hover reason; %s has none", want)
 		}
 	}
 }

@@ -402,7 +402,7 @@ func familyByName(name string) Family {
 // The destination half of a move: who can receive a disk, and does everyone
 // else explain why not.
 func TestIngestRefusalsAreExplained(t *testing.T) {
-	for _, backend := range []string{"qemu", "libvirt", "kubevirt", "proxmox"} {
+	for _, backend := range []string{"qemu", "libvirt", "kubevirt", "proxmox", "incus"} {
 		if !CanIngest(backend) {
 			t.Errorf("%s should be able to receive a moved instance", backend)
 		}
@@ -411,16 +411,13 @@ func TestIngestRefusalsAreExplained(t *testing.T) {
 		}
 	}
 	// A backend that cannot receive must say why, and name the alternative.
-	for _, backend := range []string{"incus", "vmware"} {
+	for _, backend := range []string{"vmware"} {
 		if CanIngest(backend) {
 			t.Errorf("%s claims it can ingest", backend)
 		}
 		refusal := IngestRefusal(backend)
 		if refusal == "" {
 			t.Errorf("%s cannot ingest and gives no reason", backend)
-		}
-		if backend == "incus" && !strings.Contains(refusal, "but not a destination") {
-			t.Errorf("the Incus refusal should say it can still be a source: %q", refusal)
 		}
 	}
 }
@@ -434,7 +431,7 @@ func TestIngestersDeclareTheirFirmwareSupport(t *testing.T) {
 		"qemu": false,
 		// libvirt's domain XML selects firmware; KubeVirt sets
 		// firmware.bootloader.efi; PVE sets bios=ovmf plus an EFI vars disk.
-		"libvirt": true, "kubevirt": true, "proxmox": true,
+		"libvirt": true, "kubevirt": true, "proxmox": true, "incus": true,
 	} {
 		adapter, err := probe(backend)
 		if err != nil {
