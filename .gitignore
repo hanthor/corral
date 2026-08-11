@@ -35,3 +35,7 @@ corral.txt
 test-results/
 corral
 corral-incus
+
+# Local build outputs (never commit)
+.tmp/
+.tmp/**
