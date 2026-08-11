@@ -47,7 +47,7 @@ backend cannot, or it is meaningless there.
 | Add / remove disks | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Expand disk | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | GPU passthrough | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
-| Export / backup disk | ✅ | ✅ | ✅ | ✅ | 🔨 |
+| Export / backup disk | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Events | ✅ | ✅ | — | — | ✅ |
 | Tags | ✅ | 🔨 | 🔨 | 🔨 | ✅ |
 | Published ports | ✅ | ✅ | 🔨 | — | — |
@@ -183,13 +183,12 @@ bridge is not, so the capability flags say no and the matrix says why.
 - **gpu** — hostdev in the domain XML
 - **tags** — domain metadata
 
-### proxmox — 5 gaps
+### proxmox — 4 gaps
 
 - **tty** — termproxy tickets are implemented (pkg/proxmoxbe.TermTicket); the web websocket bridge is not wired yet
 - **vnc** — vncproxy tickets are implemented (pkg/proxmoxbe.VNCTicket); the web websocket bridge is not wired yet
 - **rdp** — same, via the guest address
 - **containers** — pkg/proxmoxbe.Containers lists them and Create makes them; pkg/ct does not yet surface a non-Kubernetes CT
-- **export** — vzdump in snapshot mode; pkg/export has no PVE adapter, so a PVE guest cannot yet be a move source
 
 ## Testing parity
 

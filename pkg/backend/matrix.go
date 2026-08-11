@@ -239,7 +239,7 @@ var Matrix = map[string]map[string]Entry{
 		"qemu":     {Shipped, "qemu-img convert while stopped — pkg/export.QEMU"},
 		"incus":    {Shipped, "incus export; qcow2 pulls the boot disk out of the archive — pkg/export.Incus"},
 		"libvirt":  {Shipped, "qemu-img convert of the backing volume — pkg/export.Libvirt"},
-		"proxmox":  {Possible, "vzdump in snapshot mode; the export adapter downloads the backup over the PVE API, extracts the disk via vma, and converts to qcow2"},
+		"proxmox":  {Shipped, "vzdump in snapshot mode; the export adapter downloads the backup over the PVE API, extracts the disk via vma, and converts to qcow2 — pkg/proxmoxbe.Export"},
 	},
 	"events": {
 		"kubevirt": {Shipped, "kubectl get events for the VM and its launcher pod"},

@@ -219,12 +219,13 @@ func TestPreflightRefusesContainers(t *testing.T) {
 	mustRefuse(t, Preflight(src, to("qemu")), "containers cannot be moved")
 }
 
-func TestPreflightRefusesIncusAsADestination(t *testing.T) {
+func TestPreflightAllowsIncusAsADestination(t *testing.T) {
+	// Incus is a destination now that the Ingester publishes a qcow2 as an
+	// Incus image and boots a VM from it (fixes #164).
 	newStub(t)
 	plan := Preflight(sourceVM(), to("incus"))
-	mustRefuse(t, plan, "cannot receive a moved instance")
-	if !strings.Contains(refusalText(plan), "stub: incus") {
-		t.Errorf("the refusal should carry the backend's own explanation, got:\n%s", refusalText(plan))
+	if !plan.OK() {
+		t.Fatalf("incus should be a valid move destination:\n%s", refusalText(plan))
 	}
 }
 
@@ -490,7 +491,7 @@ func TestExecuteDeletesTheSourceOnlyWhenAsked(t *testing.T) {
 
 func TestExecuteRefusesToRunARefusedPlan(t *testing.T) {
 	s := newStub(t)
-	plan := Preflight(sourceVM(), to("incus"))
+	plan := Preflight(sourceVM(), to(""))
 	if _, err := Execute(context.Background(), plan, nil); err == nil {
 		t.Fatal("Execute must not run a plan preflight refused")
 	}
@@ -606,11 +607,11 @@ func TestRealSeamsAreWiredToTheRealPackages(t *testing.T) {
 	if !canIngest("qemu") {
 		t.Error("qemu implements backend.Ingester, so the real canIngest should say so")
 	}
-	if canIngest("incus") {
-		t.Error("incus deliberately does not implement Ingester")
+	if !canIngest("incus") {
+		t.Error("incus implements backend.Ingester (image-publish destination, #164), so the real canIngest should say so")
 	}
-	if ingestReason("incus") == "" {
-		t.Error("and the absence must come with an explanation")
+	if ingestReason("qemu") != "" {
+		t.Error("a backend with an ingester should have no refusal reason")
 	}
 	if got := formatsFor("kubevirt"); len(got) == 0 {
 		t.Error("the real export.Formats should answer for kubevirt")
