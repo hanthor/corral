@@ -12,6 +12,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/incus"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/proxmoxbe"
 	"github.com/tuna-os/corral/pkg/qemu"
 	"github.com/tuna-os/corral/pkg/snapshot"
 	"github.com/tuna-os/corral/pkg/types"
@@ -408,6 +409,201 @@ func (Incus) running(remote, name string) bool {
 		}
 	}
 	return false
+}
+
+// ── Proxmox ───────────────────────────────────────────────────────
+//
+// vzdump writes a full backup of the VM (not just the boot disk) into a VMA
+// archive on storage, the archive is downloaded, and the first disk is
+// extracted and converted to qcow2.
+//
+// VMA extraction uses the `vma` tool (from pve-qemu-kvm). When it is not
+// installed the adapter refuses with the package name, so an operator on a
+// non-PVE host knows what to install rather than receiving a generic command-
+// not-found.
+
+type PVE struct{}
+
+func (PVE) Formats() []Format { return []Format{Qcow2, RawGz} }
+
+func (p PVE) Export(ctx context.Context, req Request, progress ProgressFunc) (Result, error) {
+	format, err := pickFormat("proxmox", req.Format, p.Formats())
+	if err != nil {
+		return Result{}, err
+	}
+	if err := ensureDestDir(req.Dest); err != nil {
+		return Result{}, err
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+
+	client, err := proxmoxbe.ClientForContext(req.Ref.Context)
+	if err != nil {
+		return Result{}, fmt.Errorf("proxmox: no client for context %q: %w", req.Ref.Context, err)
+	}
+
+	progress.report("resolving guest", 0, 0)
+	guest, err := client.Resolve(req.Ref.Name)
+	if err != nil {
+		return Result{}, err
+	}
+
+	// A container has no disk image — the same distinction the Incus adapter
+	// already draws.
+	if guest.Kind == proxmoxbe.KindLXC {
+		return Result{}, unsupported("proxmox",
+			fmt.Sprintf("%s is a container, and a container has no disk image", req.Ref.Name),
+			"export it as a rootfs tarball from the container itself")
+	}
+
+	consistency := snapshot.Offline
+	status, err := client.Status(req.Ref.Name)
+	if err == nil && status.Status == "running" {
+		// vzdump in snapshot mode snapshots the running guest first, producing
+		// a crash-consistent capture.
+		consistency = snapshot.Crash
+	}
+
+	archive := req.Dest + ".vma.zst"
+	defer os.Remove(archive)
+
+	progress.report("creating backup (vzdump)", 0, 0)
+	if err := client.ExportDisk(req.Ref.Name, archive); err != nil {
+		return Result{}, fmt.Errorf("proxmox: exporting %s: %w", req.Ref.Name, err)
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+
+	// Extract the first disk from the VMA archive and convert to the
+	// requested format.
+	progress.report("extracting disk", 0, 0)
+	raw := req.Dest + ".img"
+	defer os.Remove(raw)
+	if err := extractVMADisk(archive, raw); err != nil {
+		return Result{}, fmt.Errorf("proxmox: extracting the disk from the backup: %w", err)
+	}
+	if err := cancelled(ctx); err != nil {
+		return Result{}, err
+	}
+
+	target := "qcow2"
+	dest := req.Dest
+	if format == RawGz {
+		target, dest = "raw", req.Dest+".raw"
+		defer os.Remove(dest)
+	}
+
+	progress.report("converting disk", 0, virtualSize(raw))
+	args := []string{"convert", "-O", target}
+	if target == "qcow2" {
+		args = append(args, "-c")
+	}
+	args = append(args, raw, dest)
+	if out, err := runner.Run(qemuImg(), args...); err != nil {
+		return Result{}, fmt.Errorf("qemu-img convert: %s", commandError(out, err))
+	}
+
+	if format == RawGz {
+		progress.report("compressing", 0, 0)
+		if err := gzipFile(dest, req.Dest); err != nil {
+			return Result{}, err
+		}
+	}
+	return finish(req.Dest, format, consistency)
+}
+
+// extractVMADisk decompresses a vzdump archive (possibly zstd-compressed) and
+// extracts the first disk image into destPath.
+//
+// The vma tool is part of pve-qemu-kvm and provides the only supported way to
+// extract a disk image from a VMA archive without implementing the format
+// ourselves.
+func extractVMADisk(archive, dest string) error {
+	// Check for the vma tool first, so a user on a non-PVE host gets a clear
+	// message rather than a generic "not found".
+	vmaBin := vmaBinary()
+	if vmaBin == "" {
+		return unsupported("proxmox",
+			"the vma tool is not installed (pve-qemu-kvm package)",
+			"install pve-qemu-kvm or extract the archive manually with: vma extract <archive> <dir>")
+	}
+
+	extractDir, err := os.MkdirTemp(filepath.Dir(dest), "corral-vma-")
+	if err != nil {
+		return fmt.Errorf("creating temp dir for vma extraction: %w", err)
+	}
+	defer os.RemoveAll(extractDir)
+
+	// Decompress zst first if needed (vma can read .zst but the tool may not be
+	// built with zstd support everywhere).
+	vmaFile := archive
+	if strings.HasSuffix(archive, ".zst") {
+		decompressed := strings.TrimSuffix(archive, ".zst")
+		defer os.Remove(decompressed)
+		if out, err := runner.Run("zstd", "-d", archive, "-o", decompressed, "-f", "--no-progress"); err != nil {
+			return fmt.Errorf("decompressing backup: %s", commandError(out, err))
+		}
+		vmaFile = decompressed
+	}
+
+	// Extract all files from the VMA archive into the temp dir.
+	if out, err := runner.Run(vmaBin, "extract", vmaFile, extractDir); err != nil {
+		return fmt.Errorf("vma extract: %s", commandError(out, err))
+	}
+
+	// Find the first disk image in the extracted directory.
+	// VMA extracts files with names like "drive-scsi0.img" or "drive-virtio0.img".
+	entries, err := os.ReadDir(extractDir)
+	if err != nil {
+		return fmt.Errorf("reading extracted backup: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "drive-") && (strings.HasSuffix(name, ".img") || strings.HasSuffix(name, ".raw")) {
+			src := filepath.Join(extractDir, name)
+			if err := os.Rename(src, dest); err != nil {
+				// Cross-filesystem rename; fall back to copy.
+				if err := copyFile(src, dest); err != nil {
+					return fmt.Errorf("moving extracted disk %s: %w", name, err)
+				}
+				os.Remove(src)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("no disk image found in the backup archive (expected drive-*.img)")
+}
+
+// vmaBinary looks for the vma tool the same way qemuImg looks for qemu-img.
+func vmaBinary() string {
+	if bin, err := runner.LookPath("vma"); err == nil {
+		return bin
+	}
+	for _, base := range []string{"/usr/bin", "/usr/local/bin", "/usr/libexec/pve"} {
+		candidate := filepath.Join(base, "vma")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	_, err = io.Copy(d, s)
+	return err
 }
 
 // ── tool helpers ──────────────────────────────────────────────────

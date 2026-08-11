@@ -42,13 +42,14 @@ type stub struct {
 func newStub(t *testing.T) *stub {
 	t.Helper()
 	s := &stub{
-		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true},
-		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true},
+		ingestable: map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": true},
+		uefiOK:     map[string]bool{"libvirt": true, "kubevirt": true, "proxmox": true, "incus": true},
 		formats: map[string][]export.Format{
 			"kubevirt": {export.RawGz, export.Qcow2},
 			"qemu":     {export.Qcow2, export.RawGz},
 			"libvirt":  {export.Qcow2, export.RawGz},
 			"incus":    {export.IncusTar, export.Qcow2},
+			"proxmox":  {export.Qcow2, export.RawGz},
 		},
 		free: 1 << 40,
 	}
@@ -252,11 +253,14 @@ func TestPreflightRefusesASourceWhoseExportIsNotADisk(t *testing.T) {
 	mustRefuse(t, Preflight(src, to("qemu")), "not a disk image")
 }
 
-func TestPreflightRefusesABackendThatCannotExport(t *testing.T) {
-	newStub(t)
+func TestPreflightAllowsProxmoxAsExportSource(t *testing.T) {
+	s := newStub(t)
 	src := sourceVM()
-	src.VM.Backend = "proxmox" // not in export.Supported today
-	mustRefuse(t, Preflight(src, to("qemu")), "cannot export a disk")
+	src.VM.Backend = "proxmox"
+	plan := Preflight(src, to("qemu"))
+	if !plan.OK() {
+		t.Fatalf("proxmox should be a valid move source after the PVE export adapter was added:\n%s", refusalText(plan))
+	}
 }
 
 func TestPreflightRefusesUEFIOntoABIOSOnlyDestination(t *testing.T) {
@@ -618,8 +622,8 @@ func TestRealSeamsAreWiredToTheRealPackages(t *testing.T) {
 }
 
 // TestPairsMatchTheADR pins the supported-pairs table to the code, so the two
-// cannot drift silently. It reflects the first slice: qemu and libvirt are the
-// only destinations wired, which ADR-0010 records.
+// cannot drift silently. It reflects the current state of move sources and
+// destinations as wired in pkg/export and pkg/backend.
 func TestPairsMatchTheADR(t *testing.T) {
 	s := newStub(t)
 	// Real capability answers, stubbed free space: whether /tmp happens to hold
@@ -628,8 +632,8 @@ func TestPairsMatchTheADR(t *testing.T) {
 	acceptsUEFI, formatsFor = destinationAcceptsUEFI, export.Formats
 	_ = s
 
-	sources := []string{"kubevirt", "qemu", "libvirt", "incus"}
-	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": false}
+	sources := []string{"kubevirt", "qemu", "libvirt", "incus", "proxmox"}
+	destinations := map[string]bool{"qemu": true, "libvirt": true, "kubevirt": true, "proxmox": true, "incus": true}
 
 	for _, from := range sources {
 		for dst, want := range destinations {
