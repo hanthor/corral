@@ -24,7 +24,7 @@ containers side by side — on top of whatever you've got:
 
 The fastest way to judge it (no cluster, no kubectl, nothing):
 
-    brew install hanthor/tap/corral   # or the curl|sh in the README
+    brew install tuna-os/tap/corral-vm   # or the curl|sh in the README
     corral --demo                     # the TUI against a built-in fake cluster
     corral web --demo                 # the dashboard on 127.0.0.1:8006
 
