@@ -346,7 +346,7 @@ kubectl + virtctl, published by the repo CI), deployed by
 `talos-k8s/corral-web.yaml` with a scoped ClusterRole and a Service exposed
 to the tailnet by the Tailscale operator (`corral.<tailnet>.ts.net`). The web
 UI shares the registry and cluster state with the CLI/TUI — all three work in
-tandem. Roadmap: `WEBUI-PLAN.md`.
+tandem. Roadmap: the web UI section above and [docs/api.md](docs/api.md).
 
 ## 10. Security model
 
@@ -389,5 +389,3 @@ tandem. Roadmap: `WEBUI-PLAN.md`.
 - [docs/api.md](docs/api.md) — REST API reference
 - [docs/architecture.md](docs/architecture.md) — package map & design decisions
 - [docs/kubevirt-proxmox-setup.md](docs/kubevirt-proxmox-setup.md) — setup guide
-- [WEBUI-PLAN.md](WEBUI-PLAN.md) — web UI architecture
-- [HANDOFF.md](HANDOFF.md) — current state for developers
