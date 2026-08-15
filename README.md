@@ -456,7 +456,7 @@ logins: listed users can mutate; everyone else gets a **read-only** UI and
 mutating API calls are rejected (403). Unset = single-user/open (the default).
 Identity comes from the Tailscale ingress headers — see
 [ADR-0003](docs/adr/0003-identity-source.md). Feature roadmap:
-[`WEBUI-PLAN.md`](WEBUI-PLAN.md).
+[SPEC.md](SPEC.md) and [docs/api.md](docs/api.md).
 
 ## Command reference
 
@@ -532,7 +532,6 @@ Full design document: [SPEC.md](SPEC.md).
 ## Documentation
 
 - **[SPEC.md](SPEC.md)** — full specification (commands, flags, types, backends, registry)
-- **[WEBUI-PLAN.md](WEBUI-PLAN.md)** — web UI architecture, Proxmox feature map, constraints
 - **[docs/api.md](docs/api.md)** — complete REST API reference
 - **[docs/architecture.md](docs/architecture.md)** — package map, design decisions, data flow, build system
 - **[docs/ci-boot-gate.md](docs/ci-boot-gate.md)** — gating CI publishes on bootc images actually booting (QEMU + KubeVirt), with field-tested troubleshooting
