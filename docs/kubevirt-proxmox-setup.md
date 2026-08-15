@@ -96,7 +96,7 @@ kubectl label ns longhorn-system pod-security.kubernetes.io/enforce=privileged -
 
 Longhorn needs `open-iscsi`/`iscsid` on every node. On normal Linux:
 `apt install open-iscsi && systemctl enable --now iscsid`. **On Talos Linux**
-it's a system extension — see [`talos-k8s/longhorn/README.md`](../../talos-k8s/longhorn/README.md)
+it's a system extension — see the [siderolabs `iscsi-tools` extension](https://github.com/siderolabs/extensions/tree/main/storage/iscsi-tools)
 (image-factory schematic with `siderolabs/iscsi-tools` + a `/var/lib/longhorn`
 kubelet mount).
 
