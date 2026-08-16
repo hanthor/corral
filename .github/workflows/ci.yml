@@ -112,7 +112,7 @@ jobs:
   release-binaries:
     # Publishes static binaries to a rolling "binaries" release so consumers
     # (e.g. the dotfiles ansible role) can fetch a stable URL:
-    # https://github.com/hanthor/corral/releases/download/binaries/corral-linux-<arch>
+    # https://github.com/tuna-os/corral/releases/download/binaries/corral-linux-<arch>
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
