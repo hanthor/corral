@@ -538,6 +538,7 @@ Full design document: [SPEC.md](SPEC.md).
 - **[docs/kubevirt-proxmox-setup.md](docs/kubevirt-proxmox-setup.md)** — from-scratch KubeVirt + Longhorn + Corral setup guide
 - **[docs/testing.md](docs/testing.md)** — testing strategy & plan (unit, integration, E2E)
 - **[docs/vdi.md](docs/vdi.md)** — VDI plugin setup guide (desktop pools)
+- **[docs/vdi-epic-status.md](docs/vdi-epic-status.md)** — VDI epic dependency chain & hardware gating status (#69)
 - **[docs/rfc/0001-vdi-plugin.md](docs/rfc/0001-vdi-plugin.md)** — VDI plugin design + phased roadmap
 
 ## Requirements

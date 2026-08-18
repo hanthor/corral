@@ -14,11 +14,13 @@ curated marketplace.
 | `schedule` | Lifecycle windows | KubeVirt | Kubernetes CronJobs for VM start/stop |
 | `snapsched` | Snapshot retention schedules | KubeVirt | KubeVirt snapshots and pruning CronJobs |
 | `windows` | Windows VM creation | KubeVirt | UEFI, TPM, Hyper-V, installer and virtio media |
+| `vdi` | Desktop pools (Phase 1) | KubeVirt | Static desktop pools, golden VM cloning, manual assignment |
 
-`corral-vdi` remains an experimental Phase-1 implementation governed by
-RFC-0001. It is intentionally excluded from the current platform-completion
-work. `corral-incus` is a compatibility binary for older installations; Incus
-is now a built-in backend and is not published as a marketplace plugin.
+`corral-vdi` provides Phase-1 static desktop pools governed by RFC-0001 and
+documented in [docs/vdi.md](vdi.md) (with epic dependency gating tracked in
+[docs/vdi-epic-status.md](vdi-epic-status.md)). `corral-incus` is a compatibility
+binary for older installations; Incus is now a built-in backend and is not
+published as a marketplace plugin.
 
 First-party source is not automatically trusted at runtime. Marketplace v2
 still requires immutable URLs and SHA-256 checksums, validates optional
