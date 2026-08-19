@@ -24,7 +24,7 @@ containers side by side — on top of whatever you've got:
 
 The fastest way to judge it (no cluster, no kubectl, nothing):
 
-    brew install tuna-os/tap/corral   # or the curl|sh in the README
+    brew install tuna-os/tap/corral-vm   # or the curl|sh in the README
     corral --demo                     # the TUI against a built-in fake cluster
     corral web --demo                 # the dashboard on 127.0.0.1:8006
 
@@ -42,10 +42,10 @@ the next build. Proxmox structurally can't do that.
 
 Honest state of things: v0.1.x, five weeks old, one developer plus a lot of
 Claude. The KubeVirt backend is the most exercised path; local-QEMU-in-the-web-UI
-landed this week (lifecycle + info; consoles still route through the CLI).
-Windows VMs, GPU passthrough, scheduled snapshots/backups exist as plugins of
-varying maturity. I'd love feedback on the architecture docs (CONTEXT.md,
-docs/adr/) as much as the code.
+landed this week (lifecycle + info; console is a browser-based VNC view now, no
+CLI hop needed). Windows VMs, GPU passthrough, scheduled snapshots/backups exist
+as plugins of varying maturity. I'd love feedback on the architecture docs
+(CONTEXT.md, docs/adr/) as much as the code.
 
 Apache-2.0. Happy to answer anything.
 

@@ -3,7 +3,7 @@
 **Status:** Phases 0 and 1 implemented. Browser RDP via IronRDP/RDCleanPath
 and the `corral-vdi` static-pool CLI are shipped. Phases 2–4 remain a
 design proposal; this RFC defines their corrected scope but does not commit
-their implementation. Setup guide: [docs/vdi.md](../vdi.md).
+their implementation. Setup guide: [docs/vdi.md](../vdi.md), epic status: [docs/vdi-epic-status.md](../vdi-epic-status.md).
 **Date:** 2026-07-02
 **Updated:** 2026-07-29
 **Author:** grilled out of a live session with James Reilly + Claude

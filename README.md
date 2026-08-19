@@ -6,7 +6,8 @@ You have VMs in two places: quick ones on your laptop, big ones on the
 Kubernetes cluster in the closet. Two sets of tooling, two networking
 stories, and none of it reachable from the couch.
 
-Corral fixes that. One command, two backends, and every VM lands inside the
+Corral fixes that. One command, every backend — local QEMU/KVM, KubeVirt,
+Incus, libvirt, or a federated Corral peer — and every VM lands inside the
 one network all your devices already share — your Tailscale tailnet.
 
 ```bash
@@ -32,9 +33,11 @@ VMs are cattle. Stop treating each one like a networking project.
 ## Why you'll like it
 
 - **Same commands everywhere.** `create` / `start` / `ssh` / `viewer` /
-  `clone` / `delete` work identically whether the VM is local QEMU/KVM or
-  KubeVirt on your cluster. Corral remembers which is which — you never
-  specify it again.
+  `clone` / `delete` work identically across every backend context — local
+  QEMU/KVM, KubeVirt on your cluster, Incus, libvirt, or a federated Corral
+  peer (advertised/direct guest endpoints first, HTTP/WebSocket relay as
+  fallback — see [backend support matrix](docs/backend-support.md)). Corral
+  remembers which is which — you never specify it again.
 - **Your OS is a container image.** Point Corral at a *bootable container*
   (`corral create dev --bootc ghcr.io/...`) and it builds the OS disk
   on-cluster with `bootc install to-disk`, then boots it as a first-class VM.
@@ -453,7 +456,7 @@ logins: listed users can mutate; everyone else gets a **read-only** UI and
 mutating API calls are rejected (403). Unset = single-user/open (the default).
 Identity comes from the Tailscale ingress headers — see
 [ADR-0003](docs/adr/0003-identity-source.md). Feature roadmap:
-[`WEBUI-PLAN.md`](WEBUI-PLAN.md).
+[SPEC.md](SPEC.md) and [docs/api.md](docs/api.md).
 
 ## Command reference
 
@@ -529,13 +532,13 @@ Full design document: [SPEC.md](SPEC.md).
 ## Documentation
 
 - **[SPEC.md](SPEC.md)** — full specification (commands, flags, types, backends, registry)
-- **[WEBUI-PLAN.md](WEBUI-PLAN.md)** — web UI architecture, Proxmox feature map, constraints
 - **[docs/api.md](docs/api.md)** — complete REST API reference
 - **[docs/architecture.md](docs/architecture.md)** — package map, design decisions, data flow, build system
 - **[docs/ci-boot-gate.md](docs/ci-boot-gate.md)** — gating CI publishes on bootc images actually booting (QEMU + KubeVirt), with field-tested troubleshooting
 - **[docs/kubevirt-proxmox-setup.md](docs/kubevirt-proxmox-setup.md)** — from-scratch KubeVirt + Longhorn + Corral setup guide
 - **[docs/testing.md](docs/testing.md)** — testing strategy & plan (unit, integration, E2E)
 - **[docs/vdi.md](docs/vdi.md)** — VDI plugin setup guide (desktop pools)
+- **[docs/vdi-epic-status.md](docs/vdi-epic-status.md)** — VDI epic dependency chain & hardware gating status (#69)
 - **[docs/rfc/0001-vdi-plugin.md](docs/rfc/0001-vdi-plugin.md)** — VDI plugin design + phased roadmap
 
 ## Requirements
