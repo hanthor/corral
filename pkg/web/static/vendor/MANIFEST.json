@@ -1,0 +1,69 @@
+{
+  "$comment": "Provenance record for the third-party browser assets vendored into the corral binary via //go:embed (pkg/web/server.go). Every file the web UI loads that corral did not author is listed here. Paths are relative to pkg/web/static/. upstreamVerified records whether the vendored bytes were re-downloaded from the recorded url and matched the recorded sha256. Update this file in the same commit that updates an asset; see README.md for the download recipe. Tracking: https://github.com/tuna-os/corral/issues/215",
+  "schemaVersion": "corral.vendor/v1",
+  "assets": [
+    {
+      "path": "vendor/xterm.min.js",
+      "package": "@xterm/xterm",
+      "version": "5.5.0",
+      "url": "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js",
+      "sha256": "4196e242ef1cf4c2adead8d97f4a772a69576076f70b095e004b4abbb049e7bf",
+      "bytes": 289714,
+      "usedFor": "serial TTY console",
+      "upstreamVerified": true
+    },
+    {
+      "path": "vendor/xterm.min.css",
+      "package": "@xterm/xterm",
+      "version": "5.5.0",
+      "url": "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css",
+      "sha256": "f7f724aea2bb620a6482bfb8e4bdecfae1152b0c7facef55fbda61f3b6cfedb2",
+      "bytes": 2877,
+      "usedFor": "serial TTY console",
+      "upstreamVerified": true
+    },
+    {
+      "path": "vendor/addon-fit.min.js",
+      "package": "@xterm/addon-fit",
+      "version": "0.10.0",
+      "url": "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js",
+      "sha256": "a6a7bbb33569f16aa3e18d71425e34d035fc89a0b7e8cba084f8855f91aa38f1",
+      "bytes": 1779,
+      "usedFor": "serial TTY console",
+      "upstreamVerified": true
+    },
+    {
+      "path": "vendor/novnc-rfb.esm.js",
+      "package": "@novnc/novnc",
+      "version": "1.4.0",
+      "url": "https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js/+esm",
+      "sha256": "8bbc67f8f66a143db08dd78c59c5439015d6b8ff2438d57f6c06212f40b134f9",
+      "bytes": 168898,
+      "usedFor": "in-browser VNC console",
+      "note": "core/rfb.js bundled to a single ES module by the jsDelivr /+esm endpoint, so the bytes are jsDelivr's bundle of that version rather than the published file.",
+      "upstreamVerified": true
+    },
+    {
+      "path": "vendor/iron-remote-desktop.js",
+      "package": "unknown",
+      "version": "unknown",
+      "url": "unknown",
+      "sha256": "22359dfb201017ebf7f25c2e496dbbfd1668bcad1a34d0dabfd05a968e1aa50f",
+      "bytes": 128765,
+      "usedFor": "in-browser RDP (ADR-0002 phase 2)",
+      "note": "Provenance was not recorded when this file was vendored and is not recoverable from the bytes: the build carries no version string, and no npm package by this name is published. The sha256 here pins the copy in tree so it cannot change unnoticed, but it cannot be checked against an upstream release until the source package and version are identified. Tracked by https://github.com/tuna-os/corral/issues/215.",
+      "upstreamVerified": false
+    },
+    {
+      "path": "alpine.min.js",
+      "package": "alpinejs",
+      "version": "3.15.12",
+      "url": "https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js",
+      "sha256": "57b37d7cae9a27d965fdae4adcc844245dfdc407e655aee85dcfff3a08036a3f",
+      "bytes": 46346,
+      "usedFor": "web UI reactivity (ADR-0004)",
+      "note": "Lives one directory up in pkg/web/static/, not in vendor/, but is vendored under the same rationale — recorded here so one file covers every vendored browser asset.",
+      "upstreamVerified": true
+    }
+  ]
+}
