@@ -465,6 +465,7 @@ corral                  TUI (VMs and Containers side by side)
 corral web              Proxmox-style web UI [--addr host:port]
 corral doctor           cluster health checks, --fix for safe auto-fixes
 corral list             all VMs, both backends
+corral context          get | use <name> | add <name> --backend <bck> | list | rm <name>
 corral create <name>    --kubevirt | (default: local qemu)
                         --mem 4G --cpu 2 --disk 20G --iso … --container-disk …
                         --pvc … --node … --cloud-init … --instancetype … --ts-authkey …
