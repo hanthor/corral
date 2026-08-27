@@ -156,6 +156,7 @@ install corral ~/.local/bin/
 <details><summary>…or pull the container image</summary>
 
 The same image that runs `corral web` in-cluster also ships the CLI binary:
+It is published for both `linux/amd64` and `linux/arm64`.
 
 ```bash
 podman create --name corral-extract ghcr.io/tuna-os/corral:latest
