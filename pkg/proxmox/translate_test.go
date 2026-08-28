@@ -421,3 +421,56 @@ func startsWithAny(s string, prefixes []string) bool {
 
 // Suppress unused import warnings
 var _ = math.Max(float64(0), float64(0))
+
+func TestProxmoxStorageEntry(t *testing.T) {
+	sc := StorageEntry{Name: "local-lvm", Type: "lvmthin"}
+	entry := ProxmoxStorageEntry(sc, "node1")
+
+	if entry["storage"] != "local-lvm" {
+		t.Errorf("storage = %v, want local-lvm", entry["storage"])
+	}
+	if entry["node"] != "node1" {
+		t.Errorf("node = %v, want node1", entry["node"])
+	}
+	if entry["type"] != "lvmthin" {
+		t.Errorf("type = %v, want lvmthin", entry["type"])
+	}
+	if entry["content"] != "images,rootdir" {
+		t.Errorf("content = %v, want images,rootdir", entry["content"])
+	}
+	if entry["active"] != 1 || entry["enabled"] != 1 {
+		t.Errorf("expected active=1 and enabled=1, got active=%v, enabled=%v", entry["active"], entry["enabled"])
+	}
+}
+
+func TestRBACUsersToProxmox(t *testing.T) {
+	users := []RBACUser{
+		{UserID: "admin@pve", Comment: "Cluster Admin"},
+		{UserID: "viewer@pve", Comment: "Read Only"},
+	}
+	res := RBACUsersToProxmox(users)
+	if len(res) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(res))
+	}
+	if res[0]["userid"] != "admin@pve" || res[0]["comment"] != "Cluster Admin" {
+		t.Errorf("user[0] mismatch: %v", res[0])
+	}
+	if res[0]["enable"] != 1 {
+		t.Errorf("user[0] enable = %v, want 1", res[0]["enable"])
+	}
+}
+
+func TestRBACGroupsToProxmox(t *testing.T) {
+	groups := []RBACGroup{
+		{GroupID: "devs"},
+		{GroupID: "ops"},
+	}
+	res := RBACGroupsToProxmox(groups)
+	if len(res) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(res))
+	}
+	if res[0]["groupid"] != "devs" || res[1]["groupid"] != "ops" {
+		t.Errorf("group mismatch: %v", res)
+	}
+}
+
