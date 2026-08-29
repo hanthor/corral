@@ -473,4 +473,3 @@ func TestRBACGroupsToProxmox(t *testing.T) {
 		t.Errorf("group mismatch: %v", res)
 	}
 }
-
