@@ -2,13 +2,16 @@
 
 **Herd your VMs — and containers — into your tailnet.**
 
-You have VMs in two places: quick ones on your laptop, big ones on the
-Kubernetes cluster in the closet. Two sets of tooling, two networking
-stories, and none of it reachable from the couch.
+Your VMs have escaped. Quick ones on your laptop, big ones on the Kubernetes
+cluster in the closet, an Incus server that's too useful to replace, a libvirt
+host that answers over SSH, a Proxmox node you never got around to retiring.
+Five sets of tooling, five networking stories, and none of it reachable from
+the couch.
 
 Corral fixes that. One command, every backend — local QEMU/KVM, KubeVirt,
-Incus, libvirt, or a federated Corral peer — and every VM lands inside the
-one network all your devices already share — your Tailscale tailnet.
+Incus, libvirt, Proxmox VE, or a federated Corral peer — and every VM lands
+inside the one network all your devices already share — your Tailscale
+tailnet.
 
 ```bash
 corral create web --kubevirt --container-disk quay.io/containerdisks/fedora:42
@@ -38,6 +41,24 @@ VMs are cattle. Stop treating each one like a networking project.
   peer (advertised/direct guest endpoints first, HTTP/WebSocket relay as
   fallback — see [backend support matrix](docs/backend-support.md)). Corral
   remembers which is which — you never specify it again.
+- **One fleet, not five tabs.** Every configured context is aggregated at
+  once: `corral list`, the TUI and the dashboard show the whole fleet, and
+  `corral context use NAME` only chooses where *new* work lands — it never
+  hides the rest, and it never mutates kubectl's or Incus's own global config.
+  Authentication stays boring on purpose: an existing Incus remote's trust, a
+  `qemu+ssh://` URI through your OpenSSH agent and config, a PVE API token.
+  `corral doctor` runs scoped checks against every target and `--context NAME`
+  narrows it to one.
+- **Move a VM to a different backend.** `corral move <vm> --to <backend>`
+  exports the disk, converts it, ingests it on the destination and verifies
+  the result. It's *cold* and never pretends otherwise — the guest stops, and
+  `corral migrate` remains the live, within-one-backend kind. Preflight
+  refuses before anything is touched and reports every reason at once
+  (firmware, disk bus, free space, the new MAC/IP), `--dry-run` just prints
+  the plan, and the source is left **stopped, not deleted** unless you pass
+  `--delete-source`. Disk export works on every backend on its own too —
+  qcow2, raw.gz, or an Incus tarball. See
+  [ADR-0010](docs/adr/0010-cross-backend-move.md).
 - **Your OS is a container image.** Point Corral at a *bootable container*
   (`corral create dev --bootc ghcr.io/...`) and it builds the OS disk
   on-cluster with `bootc install to-disk`, then boots it as a first-class VM.
@@ -464,7 +485,7 @@ Identity comes from the Tailscale ingress headers — see
 corral                  TUI (VMs and Containers side by side)
 corral web              Proxmox-style web UI [--addr host:port]
 corral doctor           cluster health checks, --fix for safe auto-fixes
-corral list             all VMs, both backends
+corral list             all VMs, every configured context
 corral context          get | use <name> | add <name> --backend <bck> | list | rm <name>
 corral create <name>    --kubevirt | (default: local qemu)
                         --mem 4G --cpu 2 --disk 20G --iso … --container-disk …
@@ -481,6 +502,8 @@ corral restart <name>   restart a VM
 corral pause|unpause    [kubevirt] freeze / resume a running VM
 corral scale <name>     [kubevirt] --cpu N --mem 8G (live hotplug when possible)
 corral migrate <name>   [kubevirt] --node X  live-migrate to another node
+corral move <name>      --to <backend> cold cross-backend move (export →
+                          ingest → verify); --dry-run, --delete-source
 corral adddisk <name>   [kubevirt] --size 10Gi  hotplug a new disk
 corral rmdisk <name>    [kubevirt] --volume PVC  detach a hotplugged disk
 corral snapshot …       [kubevirt] create | ls | restore | rm
@@ -535,6 +558,8 @@ Full design document: [SPEC.md](SPEC.md).
 - **[SPEC.md](SPEC.md)** — full specification (commands, flags, types, backends, registry)
 - **[docs/api.md](docs/api.md)** — complete REST API reference
 - **[docs/architecture.md](docs/architecture.md)** — package map, design decisions, data flow, build system
+- **[docs/backend-support.md](docs/backend-support.md)** — what each backend context can do (local QEMU, KubeVirt, Incus, libvirt, Corral peer)
+- **[docs/backend-parity.md](docs/backend-parity.md)** — per-operation parity matrix, generated from `pkg/backend.Matrix` and enforced by conformance tests
 - **[docs/ci-boot-gate.md](docs/ci-boot-gate.md)** — gating CI publishes on bootc images actually booting (QEMU + KubeVirt), with field-tested troubleshooting
 - **[docs/kubevirt-proxmox-setup.md](docs/kubevirt-proxmox-setup.md)** — from-scratch KubeVirt + Longhorn + Corral setup guide
 - **[docs/testing.md](docs/testing.md)** — testing strategy & plan (unit, integration, E2E)
