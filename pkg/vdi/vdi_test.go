@@ -240,6 +240,223 @@ func TestDeletePool_NotFound(t *testing.T) {
 	}
 }
 
+const kvCRWithDevices = `{
+  "spec": {"configuration": {"permittedHostDevices": {
+    "pciHostDevices": [
+      {"pciVendorSelector": "1002:744c", "resourceName": "amd.com/gpu"},
+      {"pciVendorSelector": "10de:2204", "resourceName": "nvidia.com/GA102", "externalResourceProvider": true}
+    ],
+    "mediatedDevices": [
+      {"mdevNameSelector": "GRID-T4-2Q", "resourceName": "nvidia.com/GRID-T4-2Q"}
+    ]
+  }}}
+}`
+
+const goldenVMWithGPU = `{
+  "metadata": {"name": "golden-gpu", "namespace": "corral-vms"},
+  "spec": {
+    "template": {
+      "spec": {
+        "domain": {
+          "devices": {
+            "gpus": [
+              {"name": "gpu1", "deviceName": "amd.com/gpu"}
+            ]
+          }
+        }
+      }
+    }
+  }
+}`
+
+const goldenVMWithMediated = `{
+  "metadata": {"name": "golden-mdev", "namespace": "corral-vms"},
+  "spec": {
+    "template": {
+      "spec": {
+        "domain": {
+          "devices": {
+            "gpus": [
+              {"name": "gpu1", "deviceName": "nvidia.com/GRID-T4-2Q"}
+            ]
+          }
+        }
+      }
+    }
+  }
+}`
+
+func TestValidatePoolDeviceCapacity_ExclusiveSuccess(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "json"}, goldenVMWithGPU, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"amd.com/gpu": "2"}}},
+	    {"metadata": {"name": "node-2"}, "status": {"allocatable": {"amd.com/gpu": "2"}}}
+	  ]
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+
+	reps, err := ValidatePoolDeviceCapacity("corral-vms", "golden-gpu", 4)
+	if err != nil {
+		t.Fatalf("ValidatePoolDeviceCapacity: %v", err)
+	}
+	if len(reps) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(reps))
+	}
+	if reps[0].Type != DeviceTypePCIHostDevice {
+		t.Errorf("got type %q, want %q", reps[0].Type, DeviceTypePCIHostDevice)
+	}
+	if reps[0].AllocatableTotal != 4 || reps[0].AvailableTotal != 4 || reps[0].MaxConcurrency != 4 {
+		t.Errorf("unexpected capacity: %+v", reps[0])
+	}
+}
+
+func TestValidatePoolDeviceCapacity_MediatedDevice(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-mdev", "-n", "corral-vms", "-o", "json"}, goldenVMWithMediated, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"nvidia.com/GRID-T4-2Q": "8"}}}
+	  ]
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+
+	reps, err := ValidatePoolDeviceCapacity("corral-vms", "golden-mdev", 8)
+	if err != nil {
+		t.Fatalf("ValidatePoolDeviceCapacity: %v", err)
+	}
+	if reps[0].Type != DeviceTypeMediatedDevice {
+		t.Errorf("got type %q, want %q", reps[0].Type, DeviceTypeMediatedDevice)
+	}
+	if reps[0].AvailableTotal != 8 {
+		t.Errorf("expected 8 available, got %d", reps[0].AvailableTotal)
+	}
+}
+
+func TestValidatePoolDeviceCapacity_ExistingAllocationsAndHeterogeneousNodes(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "json"}, goldenVMWithGPU, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	// node-1 has 2 GPUs, node-2 has 1 GPU, node-3 has 0
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"amd.com/gpu": "2"}}},
+	    {"metadata": {"name": "node-2"}, "status": {"allocatable": {"amd.com/gpu": "1"}}},
+	    {"metadata": {"name": "node-3"}, "status": {"allocatable": {"cpu": "16"}}}
+	  ]
+	}`, nil)
+	// Existing VMI already consumes 1 GPU on node-1
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{
+	  "items": [
+	    {
+	      "metadata": {"name": "workstation-1", "namespace": "default"},
+	      "status": {"nodeName": "node-1", "phase": "Running"},
+	      "spec": {"domain": {"devices": {"gpus": [{"deviceName": "amd.com/gpu"}]}}}
+	    }
+	  ]
+	}`, nil)
+
+	// Asking for size 2 should succeed (1 on node-1, 1 on node-2)
+	reps, err := ValidatePoolDeviceCapacity("corral-vms", "golden-gpu", 2)
+	if err != nil {
+		t.Fatalf("ValidatePoolDeviceCapacity: %v", err)
+	}
+	if reps[0].AllocatedExisting != 1 || reps[0].AvailableTotal != 2 {
+		t.Errorf("expected 1 allocated, 2 available; got %+v", reps[0])
+	}
+
+	// Asking for size 3 should fail (only 2 available across nodes)
+	_, err = ValidatePoolDeviceCapacity("corral-vms", "golden-gpu", 3)
+	if err == nil || !strings.Contains(err.Error(), "insufficient device capacity") {
+		t.Fatalf("expected insufficient capacity error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "node node-1: 1 available / 2 allocatable") {
+		t.Errorf("expected per-node breakdown in error: %v", err)
+	}
+}
+
+func TestValidatePoolDeviceCapacity_NotAllocatableOnAnyNode(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "json"}, goldenVMWithGPU, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"cpu": "8"}}}
+	  ]
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+
+	_, err := ValidatePoolDeviceCapacity("corral-vms", "golden-gpu", 1)
+	if err == nil || !strings.Contains(err.Error(), "not allocatable on any node") {
+		t.Fatalf("expected not allocatable error, got: %v", err)
+	}
+}
+
+func TestValidatePoolDeviceCapacity_UnknownCapability(t *testing.T) {
+	fake := withFake(t)
+	// VM requests a custom vendor device not listed in KubeVirt permittedHostDevices
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-custom", "-n", "corral-vms", "-o", "json"}, `{
+	  "metadata": {"name": "golden-custom", "namespace": "corral-vms"},
+	  "spec": {
+	    "template": {
+	      "spec": {
+	        "domain": {
+	          "devices": {
+	            "hostDevices": [
+	              {"name": "fpga1", "deviceName": "xilinx.com/fpga"}
+	            ]
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"xilinx.com/fpga": "2"}}}
+	  ]
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+
+	reps, err := ValidatePoolDeviceCapacity("corral-vms", "golden-custom", 2)
+	if err != nil {
+		t.Fatalf("ValidatePoolDeviceCapacity: %v", err)
+	}
+	if reps[0].Type != DeviceTypeUnknown {
+		t.Errorf("got type %q, want %q", reps[0].Type, DeviceTypeUnknown)
+	}
+}
+
+func TestCreatePool_DeviceCapacityExhaustionRefusesCreation(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "name"}, "vm/golden-gpu", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "json"}, goldenVMWithGPU, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, kvCRWithDevices, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{
+	  "items": [
+	    {"metadata": {"name": "node-1"}, "status": {"allocatable": {"amd.com/gpu": "1"}}}
+	  ]
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+
+	// Attempt to create pool of size 2 with only 1 GPU in cluster
+	_, err := CreatePool(CreateOpts{Name: "gpupool", Namespace: "corral-vms", From: "golden-gpu", Size: 2})
+	if err == nil || !strings.Contains(err.Error(), "insufficient device capacity") {
+		t.Fatalf("expected admission refusal, got: %v", err)
+	}
+
+	// Verify no clone apply commands ran
+	for _, c := range fake.Calls() {
+		if c.Name == "kubectl" && len(c.Args) > 0 && c.Args[0] == "apply" {
+			t.Errorf("unexpected apply call on refused pool creation: %v", c)
+		}
+	}
+}
+
 type fakeErr struct{ msg string }
 
 func (e *fakeErr) Error() string { return e.msg }

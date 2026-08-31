@@ -124,13 +124,30 @@ already gives Linux members. Until then:
   Either `corral vdi unassign` one, or `corral vdi pool create` a bigger
   pool (there's no live resize yet — delete and recreate, or create a
   second pool).
+- **`insufficient device capacity for "X"` or `device admission failed`** —
+  The golden VM requests host devices (PCI passthrough, mediated vGPU, SR-IOV),
+  but cluster capacity cannot satisfy `size * per_vm_devices` across the nodes.
+  `corral vdi pool create` validates allocatable devices minus active VMI allocations
+  and refuses pool creation up front before partial clones can be created.
 - **Assigned member won't start** — `corral vdi assign` surfaces the
   underlying `virtctl start` error directly (e.g. insufficient cluster
   capacity, a feature-gate the golden VM's spec needs). The assignment
   label is still set even if start failed — `corral vdi unassign` to back
   out and retry once the underlying problem's fixed.
 
-## Current limitations (Phase 1 — by design, not bugs)
+## GPU & Host-Device Capacity Validation
+
+When a golden VM requests host devices or GPUs (via `gpus` or `hostDevices` in its spec), `corral vdi pool create` performs pre-flight capacity admission:
+1. **Device type classification**: Inspects KubeVirt configuration to distinguish exclusive PCI passthrough (`pciHostDevices`), mediated vGPU devices (`mediatedDevices`), and external device providers (vGPU/SR-IOV).
+2. **Allocatable vs Allocated tracking**: Queries per-node allocatable resources and active running VMIs to compute actual remaining capacity.
+3. **Concurrency & Topology constraints**: Ensures not only that total devices are sufficient, but that node placement can satisfy multi-device requirements per VM.
+4. **Actionable failure reporting**: Refuses impossible pools before any mutation and reports resource shortages with per-node availability breakdowns.
+
+### Hardware Limitations
+- **Single-VM Full Passthrough**: Physical GPUs attached via full PCI passthrough (e.g., consumer GPUs without SR-IOV/vGPU support) are strictly 1:1 exclusive to a single running VM instance. A pool of size $N$ requires $N$ distinct physical GPUs allocatable across cluster nodes.
+- **Mediated / vGPU Sharing**: Mediated devices (NVIDIA GRID/vGPU, Intel GVT-g) allow multiple pool members per physical card up to the configured profile limit.
+
+## Current limitations (by design, not bugs)
 
 - **No self-serve.** Assignment is a CLI/admin action — there's no
   end-user "get a desktop" page yet.
@@ -139,9 +156,6 @@ already gives Linux members. Until then:
   hasn't touched devpool-1 in 3 hours" and reclaims it automatically.
 - **No live resize.** Growing or shrinking a pool means deleting and
   recreating it, or manually cloning one more member and hand-labeling it.
-- **No GPU-gating on pool create yet.** If your golden VM needs a GPU,
-  every clone needs one too — nothing stops you from creating a pool
-  bigger than your cluster's GPU capacity.
 - **CT-backed pools aren't implemented.** Only VM (KubeVirt) golden
   sources work today; Containers (CT) pooling is exploratory (RFC's Phase
   4 territory).
