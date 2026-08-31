@@ -22,6 +22,8 @@ const (
 	labelPool       = "corral.dev/vdi-pool"
 	labelAssignedTo = "corral.dev/vdi-assigned-to"
 	annoClaimedAt   = "corral.dev/vdi-claimed-at"
+	leasePrefix     = "corral-vdi-"
+	claimDuration   = time.Hour
 )
 
 // cloneWaitTimeout and clonePollInterval are vars (not consts) so tests can
@@ -146,10 +148,11 @@ func labelMember(ns, name, pool, assignedTo string) error {
 
 type vmListItem struct {
 	Metadata struct {
-		Name        string            `json:"name"`
-		Namespace   string            `json:"namespace"`
-		Labels      map[string]string `json:"labels"`
-		Annotations map[string]string `json:"annotations"`
+		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
+		ResourceVersion string            `json:"resourceVersion"`
+		Labels          map[string]string `json:"labels"`
+		Annotations     map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		Running *bool `json:"running"`
@@ -177,6 +180,88 @@ func listPoolVMs(pool string) ([]vmListItem, error) {
 		return nil, err
 	}
 	return res.Items, nil
+}
+
+type lease struct {
+	Metadata struct {
+		Name            string `json:"name"`
+		ResourceVersion string `json:"resourceVersion"`
+	} `json:"metadata"`
+	Spec struct {
+		HolderIdentity       string `json:"holderIdentity"`
+		AcquireTime          string `json:"acquireTime"`
+		RenewTime            string `json:"renewTime"`
+		LeaseDurationSeconds int32  `json:"leaseDurationSeconds"`
+	} `json:"spec"`
+}
+
+func leaseName(member string) string { return leasePrefix + member }
+
+func leaseExpired(l lease, now time.Time) bool {
+	if l.Spec.HolderIdentity == "" || l.Spec.RenewTime == "" || l.Spec.LeaseDurationSeconds <= 0 {
+		return true
+	}
+	renewed, err := time.Parse(time.RFC3339Nano, l.Spec.RenewTime)
+	return err != nil || now.After(renewed.Add(time.Duration(l.Spec.LeaseDurationSeconds)*time.Second))
+}
+
+func leaseManifest(namespace, pool, member, identity string, now time.Time, resourceVersion string) []byte {
+	metadata := map[string]any{"name": leaseName(member), "namespace": namespace, "labels": map[string]string{labelPool: pool, "corral.dev/vdi-member": member}}
+	if resourceVersion != "" {
+		metadata["resourceVersion"] = resourceVersion
+	}
+	data, err := json.Marshal(map[string]any{
+		"apiVersion": "coordination.k8s.io/v1", "kind": "Lease", "metadata": metadata,
+		"spec": map[string]any{
+			"holderIdentity": identity, "acquireTime": now.Format(time.RFC3339Nano),
+			"renewTime": now.Format(time.RFC3339Nano), "leaseDurationSeconds": int32(claimDuration.Seconds()),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+// acquireLease uses Lease creation as a first-writer-wins primitive. An
+// expired lease is replaced with its resourceVersion, making recovery a
+// compare-and-swap instead of another list-then-label race.
+func acquireLease(namespace, pool, member, identity string) (bool, error) {
+	now := time.Now().UTC()
+	if _, err := runner.RunStdin(string(leaseManifest(namespace, pool, member, identity, now, "")), "kubectl", "create", "-f", "-"); err == nil {
+		return true, nil
+	} else {
+		out, getErr := run("kubectl", "get", "lease", leaseName(member), "-n", namespace, "-o", "json")
+		if getErr != nil {
+			return false, fmt.Errorf("claim %s: lease create failed (%v); read failed: %w", member, err, getErr)
+		}
+		var current lease
+		if decodeErr := json.Unmarshal(out, &current); decodeErr != nil {
+			return false, fmt.Errorf("claim %s: decode lease: %w", member, decodeErr)
+		}
+		if current.Spec.HolderIdentity == identity && !leaseExpired(current, now) {
+			return true, nil
+		}
+		if !leaseExpired(current, now) {
+			return false, nil
+		}
+		if _, replaceErr := runner.RunStdin(string(leaseManifest(namespace, pool, member, identity, now, current.Metadata.ResourceVersion)), "kubectl", "replace", "-f", "-"); replaceErr != nil {
+			return false, nil
+		}
+		return true, nil
+	}
+}
+
+func readLease(namespace, member string) (lease, error) {
+	out, err := run("kubectl", "get", "lease", leaseName(member), "-n", namespace, "-o", "json")
+	if err != nil {
+		return lease{}, err
+	}
+	var l lease
+	if err := json.Unmarshal(out, &l); err != nil {
+		return lease{}, fmt.Errorf("decode claim lease: %w", err)
+	}
+	return l, nil
 }
 
 func toMember(v vmListItem) Member {
@@ -220,9 +305,13 @@ func ListPools() ([]Pool, error) {
 	return pools, nil
 }
 
-// Assign claims the first free (unassigned) member of pool for user,
-// starting it if it isn't already running, and returns the member's name.
-func Assign(namespace, pool, user string) (string, error) {
+// Claim atomically acquires one pool member for identity using a Kubernetes
+// Lease. Labels and annotations are updated only after the Lease is held and
+// remain presentation state for Phase 1 clients.
+func Claim(namespace, pool, identity string) (string, error) {
+	if strings.TrimSpace(identity) == "" {
+		return "", fmt.Errorf("claim identity must not be empty")
+	}
 	items, err := listPoolVMs(pool)
 	if err != nil {
 		return "", err
@@ -231,32 +320,67 @@ func Assign(namespace, pool, user string) (string, error) {
 		return "", fmt.Errorf("pool %q not found (or has no members) in ns/%s", pool, namespace)
 	}
 	for _, v := range items {
-		if v.Metadata.Labels[labelAssignedTo] != "" {
-			continue
+		assignedTo := v.Metadata.Labels[labelAssignedTo]
+		if assignedTo != "" && assignedTo != identity {
+			// Legacy Phase 1 labels have no ownership primitive and must not
+			// be stolen. A member with an expired Lease, however, is reclaimable.
+			current, leaseErr := readLease(namespace, v.Metadata.Name)
+			if leaseErr != nil || !leaseExpired(current, time.Now().UTC()) {
+				continue
+			}
 		}
 		name := v.Metadata.Name
-		if err := labelMember(namespace, name, pool, user); err != nil {
-			return "", err
+		acquired, claimErr := acquireLease(namespace, pool, name, identity)
+		if claimErr != nil {
+			return "", claimErr
+		}
+		if !acquired {
+			continue
+		}
+		if err := labelMember(namespace, name, pool, identity); err != nil {
+			return "", fmt.Errorf("claimed %s but failed to update presentation labels; release lease %s: %w", name, leaseName(name), err)
 		}
 		if v.Status.PrintableStatus != "Running" {
 			if err := kubevirt.NewClient(namespace).StartVM(name); err != nil {
-				return "", fmt.Errorf("assigned %s but failed to start it: %w", name, err)
+				return "", fmt.Errorf("claimed %s but failed to start it: %w", name, err)
 			}
 		}
 		return name, nil
 	}
-	return "", fmt.Errorf("pool %q has no free members (all %d claimed)", pool, len(items))
+	return "", fmt.Errorf("pool %q has no free members (all %d claimed or contended)", pool, len(items))
 }
 
-// Unassign releases member back to the pool's free set and stops it —
-// pooled desktops don't stay running unclaimed, matching VDI reclaim
-// intent even in this phase's hand-wired form.
-func Unassign(namespace, member string) error {
+// Assign is the Phase 1 compatibility name for Claim.
+func Assign(namespace, pool, user string) (string, error) { return Claim(namespace, pool, user) }
+
+// Release releases a member only when identity owns its Lease. Deleting the
+// Lease is the atomic ownership transition; labels are then cleared as
+// presentation state. An empty identity is accepted for an administrative
+// compatibility release of legacy label-only assignments.
+func Release(namespace, member, identity string) error {
+	l, err := readLease(namespace, member)
+	if err != nil && identity != "" {
+		return fmt.Errorf("read claim for %s: %w", member, err)
+	}
+	if err == nil && identity != "" && l.Spec.HolderIdentity != identity {
+		return fmt.Errorf("member %s is claimed by %q, not %q", member, l.Spec.HolderIdentity, identity)
+	}
 	if err := labelMember(namespace, member, poolOf(namespace, member), ""); err != nil {
+		return fmt.Errorf("release %s: clear presentation labels: %w", member, err)
+	}
+	if err == nil {
+		if _, deleteErr := run("kubectl", "delete", "lease", leaseName(member), "-n", namespace, "--resource-version", l.Metadata.ResourceVersion, "--ignore-not-found"); deleteErr != nil {
+			return fmt.Errorf("release %s: delete claim lease: %w", member, deleteErr)
+		}
+	}
+	if err := kubevirt.NewClient(namespace).StopVM(member); err != nil {
 		return err
 	}
-	return kubevirt.NewClient(namespace).StopVM(member)
+	return nil
 }
+
+// Unassign preserves the original administrative API.
+func Unassign(namespace, member string) error { return Release(namespace, member, "") }
 
 func poolOf(namespace, member string) string {
 	out, err := run("kubectl", "get", "vm", member, "-n", namespace, "-o",
