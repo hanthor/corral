@@ -9,15 +9,23 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/plugin/sdk"
 	"github.com/tuna-os/corral/pkg/registry"
 	"github.com/tuna-os/corral/pkg/types"
 	"github.com/tuna-os/corral/pkg/vdi"
 )
 
-var namespace string
+var (
+	namespace   string
+	contextName string
+	assumeYes   bool
+)
 
 func nsOrDefault() string {
 	if namespace != "" {
@@ -29,7 +37,7 @@ func nsOrDefault() string {
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "vdi",
-		Short: "Desktop pools — Phase 1 VDI: static pools, manual assignment",
+		Short: "Desktop pools — VDI desktop pools, manual assignment, and native USB redirection",
 		Long: `Desktop pools built from an already-built "golden" VM (made the normal way,
 via corral create / corral bootc / corral-windows). Pool members are clones
 of that VM; assignment is a label on the VM object, not a new CRD — see
@@ -37,7 +45,8 @@ docs/rfc/0001-vdi-plugin.md for the design and what's still ahead of this
 first slice (self-serve claim, idle reclaim, GPU pools).`,
 	}
 	root.PersistentFlags().StringVarP(&namespace, "namespace", "n", "", "Namespace (default: corral's default)")
-	root.AddCommand(poolCmd(), assignCmd(), unassignCmd(), connectCmd())
+	root.PersistentFlags().StringVar(&contextName, "context", "", "Corral context to act on (default: the selected context)")
+	root.AddCommand(poolCmd(), assignCmd(), unassignCmd(), connectCmd(), usbCmd())
 	return root
 }
 
@@ -175,9 +184,189 @@ func connectCmd() *cobra.Command {
 	}
 }
 
+func usbCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "usb",
+		Short: "Manage USB device redirection for assigned desktops",
+	}
+	cmd.AddCommand(usbListCmd(), usbRedirCmd())
+	return cmd
+}
+
+func usbListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List local USB devices available for redirection",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			devs, err := vdi.ListLocalUSBDevices()
+			if err != nil {
+				return err
+			}
+			if len(devs) == 0 {
+				fmt.Println("No USB devices found on local host.")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "SELECTOR\tBUS.DEV\tSTATUS\tDESCRIPTION")
+			for _, d := range devs {
+				status := "available"
+				if d.Busy {
+					status = "busy (" + d.BusyReason + ")"
+				}
+				busDev := fmt.Sprintf("%s.%s", d.BusNum, d.DevNum)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", d.Selector(), busDev, status, d.Description)
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func usbRedirCmd() *cobra.Command {
+	var (
+		deviceID string
+		user     string
+	)
+	c := &cobra.Command{
+		Use:   "redir <member>",
+		Short: "Redirect a local USB device to an authorized assigned desktop",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			member := args[0]
+			ns := nsOrDefault()
+
+			// Check backend context support
+			var kubeContext string
+			if contextName != "" {
+				cfg, ok := config.FindContext(contextName)
+				if !ok {
+					return fmt.Errorf("unknown context %q (see corral context ls)", contextName)
+				}
+				if cfg.Backend != "kubevirt" {
+					return fmt.Errorf("USB redirection is only supported on the kubevirt backend (context %q is %s)", contextName, cfg.Backend)
+				}
+				kubeContext = cfg.Context
+			} else {
+				def := config.DefaultContext()
+				if def.Backend == "kubevirt" {
+					kubeContext = def.Context
+				}
+			}
+
+			// Validate member assignment, running state, and authorization
+			m, err := vdi.ValidateUSBRedir(vdi.USBRedirOpts{
+				Namespace: ns,
+				Member:    member,
+				Device:    deviceID,
+				User:      user,
+				Context:   kubeContext,
+			})
+			if err != nil {
+				return err
+			}
+
+			// Device enumeration & selection
+			devs, err := vdi.ListLocalUSBDevices()
+			if err != nil {
+				return err
+			}
+
+			var selectedDev *vdi.USBDevice
+			if deviceID != "" {
+				for _, d := range devs {
+					if d.Selector() == deviceID || fmt.Sprintf("%s:%s", d.VendorID, d.ProductID) == deviceID || fmt.Sprintf("%s.%s", d.BusNum, d.DevNum) == deviceID {
+						selectedDev = &d
+						break
+					}
+				}
+				if selectedDev == nil {
+					return fmt.Errorf("USB device %q not found on local host (see `corral vdi usb list`)", deviceID)
+				}
+			} else {
+				// Interactive / first available or require --device
+				var avail []vdi.USBDevice
+				for _, d := range devs {
+					if !d.Busy {
+						avail = append(avail, d)
+					}
+				}
+				if len(avail) == 0 {
+					return fmt.Errorf("no available USB devices found on local host")
+				}
+				if len(avail) == 1 {
+					selectedDev = &avail[0]
+				} else {
+					return fmt.Errorf("multiple USB devices available; specify --device <selector> (see `corral vdi usb list`)")
+				}
+			}
+
+			if selectedDev.Busy {
+				return fmt.Errorf("device %s (%s) is busy: %s", selectedDev.Selector(), selectedDev.Description, selectedDev.BusyReason)
+			}
+
+			// Surface security, exclusivity, disconnect, and migration implications
+			fmt.Fprintf(os.Stderr, "\nAbout to redirect USB device %s (%s) to %s (assigned to %s):\n",
+				selectedDev.Selector(), selectedDev.Description, member, m.AssignedTo)
+			for _, consequence := range vdi.USBConsequences(*selectedDev) {
+				fmt.Fprintf(os.Stderr, "  • %s\n", consequence)
+			}
+
+			if !assumeYes {
+				fmt.Fprint(os.Stderr, "\nProceed with USB redirection? [y/N] ")
+				var answer string
+				fmt.Scanln(&answer)
+				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+					return fmt.Errorf("cancelled")
+				}
+			}
+
+			client := kubevirt.NewClient(ns)
+			client.Context = kubeContext
+			virtctlPath, err := client.Virtctl()
+			if err != nil {
+				return err
+			}
+
+			cmd := vdi.BuildVirtctlUSBCmd(virtctlPath, member, ns, selectedDev.Selector(), kubeContext)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			fmt.Fprintf(os.Stderr, "Starting native USB redirection for %s -> %s... (Press Ctrl+C to disconnect)\n", selectedDev.Selector(), member)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("USB redirection transport error: %w", err)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVarP(&deviceID, "device", "d", "", "USB device selector (vendorId:productId or bus.dev)")
+	c.Flags().StringVarP(&user, "user", "u", "", "Expected assignment owner for authorization check")
+	c.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Skip confirmation prompt")
+	return c
+}
+
 func main() {
+	if sdk.HandleMetadata(sdk.Metadata{
+		Name:        "vdi",
+		Version:     "0.2.0",
+		Description: "Desktop pools and native USB redirection",
+		Capabilities: []string{
+			"cli-command",
+			"vdi-pools",
+			"usb-redirection",
+		},
+		Permissions: []string{
+			"execute kubectl and virtctl",
+			"enumerate local USB devices",
+			"redirect local host USB devices to guest VMs",
+			"mutate KubeVirt VMs and labels",
+		},
+		SupportedBackends: []string{"kubevirt"},
+	}) {
+		return
+	}
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
+
