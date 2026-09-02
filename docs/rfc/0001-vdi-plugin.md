@@ -183,7 +183,10 @@ of the initial Phase 3 commitment.
 **Phase 4 (exploratory, not committed) — WebRTC streaming for ephemeral
 Linux pools.** Selkies-style container images inside Corral CTs for
 GPU-accelerated, low-latency ephemeral desktops, as an alternative to
-noVNC for that specific pool type. Track the FOSDEM D-Bus-display proposal
+noVNC for that specific pool type. The time-boxed
+[WebRTC spike decision record](../research/vdi-webrtc-spike.md) currently
+defers implementation: it requires a representative cluster comparison
+against VNC before proceeding. Track the FOSDEM D-Bus-display proposal
 before committing engineering time here — it may change the right
 integration seam.
 
