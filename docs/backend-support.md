@@ -4,15 +4,15 @@ Corral can show several contexts at once. A context is a named connection to
 one backend; changing the default context changes only where an unqualified
 command goes and never hides the rest of the fleet.
 
-| Capability | local QEMU | KubeVirt | Incus | libvirt | Corral peer |
-|---|---:|---:|---:|---:|---:|
-| Aggregate inventory | yes | yes | yes | yes | yes |
-| Start, stop, delete | yes | yes | yes | yes | relayed |
-| Create | yes | yes | yes | yes | remote API |
-| SSH | direct when address is known | direct, then console transport | `incus exec`/network | direct when address is known | direct first, relay fallback |
-| Browser console | VNC | virtctl VNC | terminal | VNC/virt-viewer | direct first, relay fallback |
-| Snapshots, migration, hotplug | backend-limited | yes | not yet unified | not yet unified | advertised by remote |
-| Backend doctor | yes | yes | yes | yes | tracked in #135 |
+| Capability | local QEMU | KubeVirt | Incus | libvirt | Proxmox VE | Corral peer |
+|---|---:|---:|---:|---:|---:|---:|
+| Aggregate inventory | yes | yes | yes | yes | yes | yes |
+| Start, stop, delete | yes | yes | yes | yes | yes | relayed |
+| Create | yes | yes | yes | yes | yes | remote API |
+| SSH | direct when address is known | direct, then console transport | `incus exec`/network | direct when address is known | direct when address is known | direct first, relay fallback |
+| Browser console | VNC | virtctl VNC | terminal | VNC/virt-viewer | tickets implemented | direct first, relay fallback |
+| Snapshots, migration, hotplug | backend-limited | yes | not yet unified | not yet unified | yes | advertised by remote |
+| Backend doctor | yes | yes | yes | yes | yes | tracked in #135 |
 
 Use `corral context get`, `corral context use NAME`, and the persistent
 `--context NAME` / `--backend NAME` flags. Bare VM names work only when unique;

@@ -15,7 +15,7 @@ var (
 var contextCmd = &cobra.Command{
 	Use:     "context",
 	Aliases: []string{"ctx"},
-	Short:   "Manage the local, Kubernetes, Incus, and libvirt contexts aggregated by Corral",
+	Short:   "Manage the local, Kubernetes, Incus, libvirt, and Proxmox contexts aggregated by Corral",
 }
 
 var contextGetCmd = &cobra.Command{Use: "get", Args: cobra.NoArgs, Run: func(*cobra.Command, []string) {

@@ -30,9 +30,16 @@ N VMs and labels them; `corral vdi pool list` reads the labels back;
 what a command actually did, `kubectl get vm -n <ns> -l corral.dev/vdi-pool`
 shows you the truth directly — there's no other state to go stale.
 
-Assignment works the same way: `corral.dev/vdi-assigned-to=<user>` label
-plus a `corral.dev/vdi-claimed-at` annotation (RFC3339 timestamp) on the
-member VM. Nothing lives outside the K8s API.
+Assignment ownership is held by a Kubernetes `coordination.k8s.io/v1`
+Lease named `corral-vdi-<member>`. Lease creation is first-writer-wins; a
+stale Lease is replaced with its `resourceVersion`, so concurrent claimants
+cannot select the same member. The Lease records the pool/member in labels,
+the identity, acquisition/renewal time, and a one-hour expiry. The
+`corral.dev/vdi-assigned-to=<user>` label plus `corral.dev/vdi-claimed-at`
+annotation remain presentation state on the VM. Existing Phase 1 pools have
+no Lease and remain visible; their first atomic claim creates one. A legacy
+`unassign` can clear label-only members, while an active Lease may only be
+released by its owner.
 
 ## Prerequisites
 
@@ -120,10 +127,16 @@ already gives Linux members. Until then:
   (see Prerequisites above) or the source VM's PVC not being
   snapshottable. This is a real, live-found failure mode — see the RFC's
   commit history for the bug that motivated the wait/timeout logic.
-- **`pool has no free members`** — every member is currently assigned.
-  Either `corral vdi unassign` one, or `corral vdi pool create` a bigger
-  pool (there's no live resize yet — delete and recreate, or create a
-  second pool).
+- **`pool has no free members`** — every member is currently assigned or
+  another claimant won its Lease race. Either `corral vdi unassign` one, or
+  `corral vdi pool create` a bigger pool (there's no live resize yet —
+  delete and recreate, or create a second pool).
+- **A claim is stuck after a partial failure** — inspect
+  `kubectl get lease -n <ns> corral-vdi-<member> -o yaml`. The Lease is
+  intentionally retained if label update or VM startup fails, preventing a
+  second user from receiving a half-configured desktop. The owner can retry
+  `corral vdi assign`; after the one-hour expiry an administrator can retry
+  and recover the member.
 - **`insufficient device capacity for "X"` or `device admission failed`** —
   The golden VM requests host devices (PCI passthrough, mediated vGPU, SR-IOV),
   but cluster capacity cannot satisfy `size * per_vm_devices` across the nodes.
@@ -150,7 +163,8 @@ When a golden VM requests host devices or GPUs (via `gpus` or `hostDevices` in i
 ## Current limitations (by design, not bugs)
 
 - **No self-serve.** Assignment is a CLI/admin action — there's no
-  end-user "get a desktop" page yet.
+  end-user "get a desktop" page yet. The Lease primitive is ready for the
+  later broker, but the broker is not part of this plugin slice.
 - **No idle/logout reclaim.** Unassigned-but-still-running members don't
   happen (unassign always stops), but there's nothing that notices "alice
   hasn't touched devpool-1 in 3 hours" and reclaims it automatically.

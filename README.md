@@ -558,7 +558,7 @@ Full design document: [SPEC.md](SPEC.md).
 - **[SPEC.md](SPEC.md)** — full specification (commands, flags, types, backends, registry)
 - **[docs/api.md](docs/api.md)** — complete REST API reference
 - **[docs/architecture.md](docs/architecture.md)** — package map, design decisions, data flow, build system
-- **[docs/backend-support.md](docs/backend-support.md)** — what each backend context can do (local QEMU, KubeVirt, Incus, libvirt, Corral peer)
+- **[docs/backend-support.md](docs/backend-support.md)** — what each backend context can do (local QEMU, KubeVirt, Incus, libvirt, Proxmox VE, Corral peer)
 - **[docs/backend-parity.md](docs/backend-parity.md)** — per-operation parity matrix, generated from `pkg/backend.Matrix` and enforced by conformance tests
 - **[docs/ci-boot-gate.md](docs/ci-boot-gate.md)** — gating CI publishes on bootc images actually booting (QEMU + KubeVirt), with field-tested troubleshooting
 - **[docs/kubevirt-proxmox-setup.md](docs/kubevirt-proxmox-setup.md)** — from-scratch KubeVirt + Longhorn + Corral setup guide

@@ -132,9 +132,13 @@ therefore use the same one-click browser experience as VNC desktops.
 *already-built* VM (built the normal way — `corral bootc`/`corral-windows`/
 `corral create` — then customized and stopped) N times via
 `kubevirt.Client.Clone`, labeled as pool members. `corral vdi assign <pool>
-<user>` hand-wires a claim (a K8s label/annotation, nothing fancier).
-`corral vdi connect <member>` prints the existing VNC/RDP/SSH paths for
-that member. Full setup guide: [docs/vdi.md](../vdi.md).
+<user>` hand-wires a claim through a per-member Kubernetes Lease; the
+existing K8s label/annotation mirror the Lease as presentation state. Lease
+creation is first-writer-wins and stale recovery uses a resource-versioned
+replacement. Existing label-only Phase 1 pools migrate lazily when their
+first atomic claim creates a Lease. `corral vdi connect <member>` prints the
+existing VNC/RDP/SSH paths for that member. Full setup guide:
+[docs/vdi.md](../vdi.md).
 
 Landed slightly differently than first drafted above: `--from <existing-vm>`
 (clone a golden VM) rather than `--template <image>` (build N from
@@ -183,7 +187,10 @@ of the initial Phase 3 commitment.
 **Phase 4 (exploratory, not committed) — WebRTC streaming for ephemeral
 Linux pools.** Selkies-style container images inside Corral CTs for
 GPU-accelerated, low-latency ephemeral desktops, as an alternative to
-noVNC for that specific pool type. Track the FOSDEM D-Bus-display proposal
+noVNC for that specific pool type. The time-boxed
+[WebRTC spike decision record](../research/vdi-webrtc-spike.md) currently
+defers implementation: it requires a representative cluster comparison
+against VNC before proceeding. Track the FOSDEM D-Bus-display proposal
 before committing engineering time here — it may change the right
 integration seam.
 
