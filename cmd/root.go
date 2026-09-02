@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -17,6 +18,13 @@ var verbose bool
 var rootDemo bool
 var rootContext string
 var rootBackend string
+var jsonOutput bool
+
+func printJSON(value any) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "corral",
@@ -74,6 +82,7 @@ func init() {
 		"Run against a built-in fake cluster (no kubectl/cluster needed) — explore the TUI, CLI, or web UI safely")
 	rootCmd.PersistentFlags().StringVar(&rootContext, "context", "", "One-shot backend context (Incus remote or kubeconfig context)")
 	rootCmd.PersistentFlags().StringVarP(&rootBackend, "backend", "b", "", "One-shot backend (qemu, kubevirt, incus, or libvirt)")
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Format machine-readable output as JSON")
 
 	// A runtime failure ("VM not found", cluster unreachable) is not a syntax
 	// error — dumping the whole usage block after it buries the message.

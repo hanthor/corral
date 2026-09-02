@@ -37,6 +37,16 @@ func runList() error {
 	result := fleet.List(context.Background())
 	vms := result.VMs
 
+	if jsonOutput {
+		sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
+		if err := printJSON(vms); err != nil {
+			return fmt.Errorf("encode VM list: %w", err)
+		}
+		for target, message := range result.Errors {
+			fmt.Fprintf(os.Stderr, "warning: context %s unavailable: %s\n", target, message)
+		}
+		return nil
+	}
 	if len(vms) == 0 {
 		fmt.Println("No VMs found. Create one: corral create <name>")
 		return nil

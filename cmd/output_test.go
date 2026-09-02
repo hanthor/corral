@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -30,6 +31,36 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatalf("reading captured stdout: %v", err)
 	}
 	return string(out)
+}
+
+func TestPrintJSON_EncodesMachineReadableOutput(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := printJSON([]types.VM{{Name: "web", Backend: "qemu"}}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var vms []types.VM
+	if err := json.Unmarshal([]byte(out), &vms); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if len(vms) != 1 || vms[0].Name != "web" {
+		t.Fatalf("unexpected JSON output: %+v", vms)
+	}
+}
+
+func TestPrintCatalogJSON_UsesCatalogCollections(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := printCatalogJSON("os", []catalog.Image{{Name: "fedora"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var images []catalog.Image
+	if err := json.Unmarshal([]byte(out), &images); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if len(images) != 1 || images[0].Name != "fedora" {
+		t.Fatalf("unexpected catalog JSON: %+v", images)
+	}
 }
 
 func TestPrintCatalog_ListsEachImage(t *testing.T) {
