@@ -131,6 +131,7 @@ func TestAssign_ClaimsFirstFreeMemberAndStartsIfStopped(t *testing.T) {
 		{"metadata":{"name":"devpool-2","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool"}},
 			"status":{"printableStatus":"Stopped"}}
 	]}`, nil)
+	fake.AddResponseKV("kubectl", []string{"create", "-f", "-"}, "", nil)
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelPool + "=devpool", "--overwrite"}, "", nil)
 	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-2", "-n", "corral-vms", labelAssignedTo + "=alice", "--overwrite"}, "", nil)
 	fake.AddPrefixResponse("kubectl annotate vm devpool-2 -n corral-vms corral.dev/vdi-claimed-at=", "", nil)
@@ -197,6 +198,40 @@ func TestUnassign_ClearsLabelAndStops(t *testing.T) {
 	}
 	if !stopped {
 		t.Error("expected Unassign to stop the member")
+	}
+}
+
+func TestClaim_RecordsAtomicLease(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", labelPool + "=devpool"}, `{"items":[{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool"}},"status":{"printableStatus":"Running"}}]}`, nil)
+	fake.AddResponseKV("kubectl", []string{"create", "-f", "-"}, "", nil)
+	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-1", "-n", "corral-vms", labelPool + "=devpool", "--overwrite"}, "", nil)
+	fake.AddResponseKV("kubectl", []string{"label", "vm", "devpool-1", "-n", "corral-vms", labelAssignedTo + "=alice", "--overwrite"}, "", nil)
+	fake.AddPrefixResponse("kubectl annotate vm devpool-1 -n corral-vms "+annoClaimedAt+"=", "", nil)
+
+	got, err := Claim("corral-vms", "devpool", "alice")
+	if err != nil || got != "devpool-1" {
+		t.Fatalf("Claim = %q, %v", got, err)
+	}
+	calls := fake.Calls()
+	if len(calls) < 2 || calls[1].Name != "kubectl" || calls[1].Args[0] != "create" {
+		t.Fatalf("expected lease create, calls=%+v", calls)
+	}
+	if !strings.Contains(calls[1].Stdin, `"kind":"Lease"`) || !strings.Contains(calls[1].Stdin, `"holderIdentity":"alice"`) || !strings.Contains(calls[1].Stdin, labelPool) {
+		t.Fatalf("lease manifest missing claim state: %s", calls[1].Stdin)
+	}
+}
+
+func TestRelease_RejectsNonOwner(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "lease", leaseName("devpool-1"), "-n", "corral-vms", "-o", "json"}, `{"metadata":{"resourceVersion":"7"},"spec":{"holderIdentity":"bob","renewTime":"2099-01-01T00:00:00Z","leaseDurationSeconds":3600}}`, nil)
+	if err := Release("corral-vms", "devpool-1", "alice"); err == nil || !strings.Contains(err.Error(), "claimed by") {
+		t.Fatalf("expected ownership error, got %v", err)
+	}
+	for _, call := range fake.Calls() {
+		if call.Args[0] == "delete" || call.Args[0] == "label" {
+			t.Fatalf("release mutated a non-owned claim: %+v", call)
+		}
 	}
 }
 

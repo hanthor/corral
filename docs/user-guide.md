@@ -32,6 +32,7 @@ flowchart TD
         Corral --> CT[Pet-Pod CT / K8s]
         Corral --> Incus[Incus / LXC and VMs]
         Corral --> Libvirt[libvirt local or SSH URI]
+        Corral --> Proxmox[Proxmox VE cluster]
         Corral --> Peer[Remote Corral peer]
     end
 
@@ -41,6 +42,7 @@ flowchart TD
         CT --> Tailnet
         Incus --> Tailnet
         Libvirt --> Tailnet
+        Proxmox --> Tailnet
         Peer --> Tailnet
     end
 ```
@@ -54,6 +56,7 @@ flowchart TD
 | **Container (CT)** | Cluster | Kubernetes Pod + PVC | "Pet Pods" — persistent Linux containers (Distrobox on K8s) |
 | **Incus** | Local or remote | Incus remote | Containers and VMs managed through existing Incus trust |
 | **libvirt** | Local or remote | libvirt URI / OpenSSH | Existing domains and remote QEMU hypervisors |
+| **Proxmox VE** | Cluster | Proxmox VE HTTPS REST API | VMs and LXC containers managed on existing PVE clusters |
 
 ---
 
@@ -252,7 +255,7 @@ corral doctor
 ```
 
 In a multi-context setup it diagnoses every configured QEMU, KubeVirt, Incus,
-and libvirt target. Use `corral doctor --context NAME` for one target. The
+libvirt, and Proxmox target. Use `corral doctor --context NAME` for one target. The
 complete capability matrix and direct-versus-relayed networking behavior are
 documented in [backend-support.md](backend-support.md).
 

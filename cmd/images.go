@@ -45,6 +45,9 @@ For anything else, import a qcow2/raw disk image by URL or file:
 		if err := validateImagesType(imagesType); err != nil {
 			return err
 		}
+		if jsonOutput {
+			return printCatalogJSON(imagesType, catalog.Images, catalog.BootcImages)
+		}
 		printCatalogSections(imagesType, catalog.Images, catalog.BootcImages)
 		return nil
 	},
@@ -78,6 +81,9 @@ var imagesSearchCmd = &cobra.Command{
 		osMatches, bootcMatches := searchCatalogs(term, imagesType)
 		if len(osMatches) == 0 && len(bootcMatches) == 0 {
 			return fmt.Errorf("no catalog image matches %q", term)
+		}
+		if jsonOutput {
+			return printCatalogJSON(imagesType, osMatches, bootcMatches)
 		}
 		printCatalogSections(imagesType, osMatches, bootcMatches)
 		return nil
@@ -160,6 +166,19 @@ func printBootcCatalog(images []catalog.BootcImage) {
 // ("os", "bootc", or "" / "all" for both), each clearly headed so `corral
 // images` surfaces both without the bootc plugin needing to be discovered
 // separately first.
+func printCatalogJSON(typeFilter string, osImages []catalog.Image, bootcImages []catalog.BootcImage) error {
+	if typeFilter == "os" {
+		return printJSON(osImages)
+	}
+	if typeFilter == "bootc" {
+		return printJSON(bootcImages)
+	}
+	return printJSON(struct {
+		OS    []catalog.Image      `json:"os"`
+		Bootc []catalog.BootcImage `json:"bootc"`
+	}{OS: osImages, Bootc: bootcImages})
+}
+
 func printCatalogSections(typeFilter string, osImages []catalog.Image, bootcImages []catalog.BootcImage) {
 	showOS := typeFilter != "bootc"
 	showBootc := typeFilter != "os"
