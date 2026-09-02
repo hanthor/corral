@@ -555,6 +555,7 @@ Full design document: [SPEC.md](SPEC.md).
 
 ## Documentation
 
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — building, testing (`just ci`, the `-tags bootc` set), code style, and how to submit a change
 - **[SPEC.md](SPEC.md)** — full specification (commands, flags, types, backends, registry)
 - **[docs/api.md](docs/api.md)** — complete REST API reference
 - **[docs/architecture.md](docs/architecture.md)** — package map, design decisions, data flow, build system
