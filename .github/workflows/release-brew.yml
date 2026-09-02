@@ -52,7 +52,7 @@ jobs:
           fi
 
       - name: Bump corral in tuna-os/homebrew-tap
-        uses: mislav/bump-homebrew-formula-action@v4.2
+        uses: mislav/bump-homebrew-formula-action@f865c8b0dbebd6e263cc06782a0e974c61cf12d2 # v4.2
         with:
           # Named corral-vm in the tap to avoid clashing with homebrew/core's
           # unrelated "corral"; the installed binary is still `corral`.
