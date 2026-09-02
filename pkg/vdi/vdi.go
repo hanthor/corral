@@ -252,6 +252,28 @@ func acquireLease(namespace, pool, member, identity string) (bool, error) {
 	}
 }
 
+// AcquireLease claims an arbitrary pool member (VM or CT) without changing
+// presentation labels. Callers update their resource's labels only after it
+// returns true.
+func AcquireLease(namespace, pool, member, identity string) (bool, error) {
+	return acquireLease(namespace, pool, member, identity)
+}
+
+// ReleaseLease releases a member lease after verifying its owner.
+func ReleaseLease(namespace, member, identity string) error {
+	l, err := readLease(namespace, member)
+	if err != nil {
+		return fmt.Errorf("read claim for %s: %w", member, err)
+	}
+	if l.Spec.HolderIdentity != identity {
+		return fmt.Errorf("member %s is claimed by %q, not %q", member, l.Spec.HolderIdentity, identity)
+	}
+	if _, err := run("kubectl", "delete", "lease", leaseName(member), "-n", namespace, "--resource-version", l.Metadata.ResourceVersion, "--ignore-not-found"); err != nil {
+		return fmt.Errorf("delete claim for %s: %w", member, err)
+	}
+	return nil
+}
+
 func readLease(namespace, member string) (lease, error) {
 	out, err := run("kubectl", "get", "lease", leaseName(member), "-n", namespace, "-o", "json")
 	if err != nil {
