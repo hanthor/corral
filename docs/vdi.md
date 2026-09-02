@@ -91,13 +91,32 @@ corral vdi connect devpool-1
 #   RDP (if the guest answers on 3389):  corral viewer devpool-1  (or a native RDP client via virtctl port-forward)
 #   SSH (Linux guests):  corral ssh devpool-1
 
-# 6. When alice is done, release it. This stops the VM too — pooled
+# 6. Native USB Redirection (smartcards, security keys, YubiKeys).
+#    List local USB devices available on the client:
+corral vdi usb list
+#    Redirect a selected device to the running assigned desktop (requires virtctl):
+corral vdi usb redir devpool-1 --device 1050:0407 --user alice
+
+# 7. When alice is done, release it. This stops the VM too — pooled
 #    desktops don't stay running unclaimed.
 corral vdi unassign devpool-1
 
-# 7. Tear the whole pool down when you're finished with it.
+# 8. Tear the whole pool down when you're finished with it.
 corral vdi pool delete devpool
 ```
+
+## Native USB Redirection
+
+`corral vdi usb redir <member>` redirects a local USB device from the operator's machine straight to the guest via `virtctl usbredir` (wrapping KubeVirt's native USB redirection rather than legacy SPICE).
+
+- **Use cases**: Hardware security keys (YubiKey / FIDO2), smartcards (CAC/PIV), USB tokens, and external peripheral passthrough.
+- **Prerequisites & constraints**:
+  - Requires the `virtctl` client binary installed locally.
+  - Desktop member must be actively **assigned** and **running** in KubeVirt.
+  - Ownership authorization check (`--user`) ensures users cannot redirect local devices to another user's desktop.
+  - KubeVirt VMs support USB redirection; CT and non-KubeVirt backends report actionable unsupported errors.
+  - Before attaching, security implications (host device exclusivity, migration blockage, guest trust boundaries) are displayed.
+
 
 ## What "connect" actually does today
 

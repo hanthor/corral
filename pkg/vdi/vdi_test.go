@@ -492,6 +492,123 @@ func TestCreatePool_DeviceCapacityExhaustionRefusesCreation(t *testing.T) {
 	}
 }
 
+func TestValidateUSBRedir_Success(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", labelPool + "=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"alice"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+
+	m, err := ValidateUSBRedir(USBRedirOpts{
+		Namespace: "corral-vms",
+		Member:    "devpool-1",
+		User:      "alice",
+	})
+	if err != nil {
+		t.Fatalf("ValidateUSBRedir: %v", err)
+	}
+	if m.Name != "devpool-1" || m.AssignedTo != "alice" {
+		t.Errorf("got %+v, want member devpool-1 assigned to alice", m)
+	}
+}
+
+func TestValidateUSBRedir_Unassigned(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", labelPool + "=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+
+	_, err := ValidateUSBRedir(USBRedirOpts{
+		Namespace: "corral-vms",
+		Member:    "devpool-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not assigned") {
+		t.Errorf("expected not assigned error, got %v", err)
+	}
+}
+
+func TestValidateUSBRedir_UnauthorizedUser(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", labelPool + "=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"bob"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+
+	_, err := ValidateUSBRedir(USBRedirOpts{
+		Namespace: "corral-vms",
+		Member:    "devpool-1",
+		User:      "alice",
+	})
+	if err == nil || !strings.Contains(err.Error(), "authorization failed") {
+		t.Errorf("expected authorization failed error, got %v", err)
+	}
+}
+
+func TestValidateUSBRedir_Stopped(t *testing.T) {
+	fake := withFake(t)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", labelPool + "=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"alice"}},
+			"status":{"printableStatus":"Stopped"}}
+	]}`, nil)
+
+	_, err := ValidateUSBRedir(USBRedirOpts{
+		Namespace: "corral-vms",
+		Member:    "devpool-1",
+		User:      "alice",
+	})
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Errorf("expected stopped member error, got %v", err)
+	}
+}
+
+func TestBuildVirtctlUSBCmd(t *testing.T) {
+	cmd := BuildVirtctlUSBCmd("/usr/local/bin/virtctl", "devpool-1", "corral-vms", "1050:0407", "custom-ctx")
+	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "usbredir devpool-1 -n corral-vms --device=1050:0407") {
+		t.Errorf("unexpected virtctl command args: %s", args)
+	}
+	if !strings.Contains(args, "--context=custom-ctx") {
+		t.Errorf("context was not injected into virtctl command: %s", args)
+	}
+}
+
+func TestListLocalUSBDevices_Seam(t *testing.T) {
+	orig := ListUSBDevicesFunc
+	defer func() { ListUSBDevicesFunc = orig }()
+
+	ListUSBDevicesFunc = func() ([]USBDevice, error) {
+		return []USBDevice{
+			{
+				BusNum:      "3",
+				DevNum:      "2",
+				VendorID:    "1050",
+				ProductID:   "0407",
+				Description: "Yubico.com YubiKey OTP+FIDO+CCID",
+			},
+		}, nil
+	}
+
+	devs, err := ListLocalUSBDevices()
+	if err != nil {
+		t.Fatalf("ListLocalUSBDevices: %v", err)
+	}
+	if len(devs) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devs))
+	}
+	if devs[0].Selector() != "1050:0407" {
+		t.Errorf("Selector = %q, want 1050:0407", devs[0].Selector())
+	}
+	consequences := USBConsequences(devs[0])
+	if len(consequences) < 3 {
+		t.Errorf("expected consequences explained, got %v", consequences)
+	}
+}
+
 type fakeErr struct{ msg string }
 
 func (e *fakeErr) Error() string { return e.msg }

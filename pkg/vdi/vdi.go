@@ -11,6 +11,9 @@ package vdi
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -716,4 +719,175 @@ func DeletePool(namespace, pool string) error {
 		}
 	}
 	return firstErr
+}
+
+// USBDevice describes a local USB device available for redirection.
+type USBDevice struct {
+	BusNum      string `json:"busNum"`
+	DevNum      string `json:"devNum"`
+	VendorID    string `json:"vendorId"`
+	ProductID   string `json:"productId"`
+	Description string `json:"description"`
+	Driver      string `json:"driver,omitempty"`
+	Busy        bool   `json:"busy,omitempty"`
+	BusyReason  string `json:"busyReason,omitempty"`
+}
+
+// FormatSelector returns the vendorID:productID or bus.dev selector.
+func (d USBDevice) Selector() string {
+	if d.VendorID != "" && d.ProductID != "" {
+		return fmt.Sprintf("%s:%s", d.VendorID, d.ProductID)
+	}
+	return fmt.Sprintf("%s.%s", d.BusNum, d.DevNum)
+}
+
+// USBConsequence explains what USB redirection entails.
+type USBConsequence string
+
+const (
+	USBConsequenceExclusive   USBConsequence = "the local host loses access to the device while redirection is active"
+	USBConsequenceMigration   USBConsequence = "live migration is blocked while a host device is redirected"
+	USBConsequenceTermination USBConsequence = "disconnecting the session will drop guest connection to the device"
+	USBConsequenceTrust       USBConsequence = "the assigned guest receives raw USB access to the device"
+)
+
+// USBConsequences returns the consequences of redirecting dev.
+func USBConsequences(dev USBDevice) []USBConsequence {
+	return []USBConsequence{
+		USBConsequenceExclusive,
+		USBConsequenceMigration,
+		USBConsequenceTermination,
+		USBConsequenceTrust,
+	}
+}
+
+// ListUSBDevicesFunc is the sysfs scanner or lsusb runner seam for testing.
+var ListUSBDevicesFunc = listUSBDevicesDefault
+
+func listUSBDevicesDefault() ([]USBDevice, error) {
+	// Discover via /sys/bus/usb/devices
+	entries, err := os.ReadDir("/sys/bus/usb/devices")
+	if err != nil {
+		return nil, fmt.Errorf("reading USB devices from sysfs: %w", err)
+	}
+
+	var devs []USBDevice
+	for _, entry := range entries {
+		devPath := filepath.Join("/sys/bus/usb/devices", entry.Name())
+		idVendorBytes, err := os.ReadFile(filepath.Join(devPath, "idVendor"))
+		if err != nil {
+			continue
+		}
+		idProductBytes, err := os.ReadFile(filepath.Join(devPath, "idProduct"))
+		if err != nil {
+			continue
+		}
+		vendorID := strings.TrimSpace(string(idVendorBytes))
+		productID := strings.TrimSpace(string(idProductBytes))
+		if vendorID == "" || productID == "" {
+			continue
+		}
+
+		busnumBytes, _ := os.ReadFile(filepath.Join(devPath, "busnum"))
+		devnumBytes, _ := os.ReadFile(filepath.Join(devPath, "devnum"))
+		busnum := strings.TrimSpace(string(busnumBytes))
+		devnum := strings.TrimSpace(string(devnumBytes))
+
+		productBytes, _ := os.ReadFile(filepath.Join(devPath, "product"))
+		manufacturerBytes, _ := os.ReadFile(filepath.Join(devPath, "manufacturer"))
+		product := strings.TrimSpace(string(productBytes))
+		manufacturer := strings.TrimSpace(string(manufacturerBytes))
+
+		desc := strings.TrimSpace(manufacturer + " " + product)
+		if desc == "" {
+			desc = fmt.Sprintf("USB Device %s:%s", vendorID, productID)
+		}
+
+		dev := USBDevice{
+			BusNum:      busnum,
+			DevNum:      devnum,
+			VendorID:    vendorID,
+			ProductID:   productID,
+			Description: desc,
+		}
+
+		// Check if it looks busy or is a root hub
+		if strings.HasPrefix(entry.Name(), "usb") || desc == "Linux Foundation root hub" {
+			dev.Busy = true
+			dev.BusyReason = "USB root hub cannot be redirected"
+		}
+
+		devs = append(devs, dev)
+	}
+
+	return devs, nil
+}
+
+// ListLocalUSBDevices returns local USB devices discovered on the host.
+func ListLocalUSBDevices() ([]USBDevice, error) {
+	return ListUSBDevicesFunc()
+}
+
+// USBRedirOpts holds parameters for redirecting a USB device to an assigned desktop.
+type USBRedirOpts struct {
+	Namespace string
+	Member    string
+	Device    string // vendorID:productID or bus.dev
+	User      string // expected caller identity for ownership check ("" skips check)
+	Context   string
+}
+
+// ValidateUSBRedir verifies assignment, running state, and authorization for member.
+func ValidateUSBRedir(opts USBRedirOpts) (Member, error) {
+	ns := opts.Namespace
+	member := opts.Member
+	if member == "" {
+		return Member{}, fmt.Errorf("member name is required")
+	}
+
+	pool := poolOf(ns, member)
+	if pool == "" {
+		return Member{}, fmt.Errorf("member %q is not part of a VDI pool in ns/%s", member, ns)
+	}
+
+	items, err := listPoolVMs(pool)
+	if err != nil {
+		return Member{}, fmt.Errorf("querying pool %q: %w", pool, err)
+	}
+
+	var targetItem *vmListItem
+	for _, it := range items {
+		if it.Metadata.Name == member {
+			targetItem = &it
+			break
+		}
+	}
+
+	if targetItem == nil {
+		return Member{}, fmt.Errorf("member %q not found in pool %q (ns/%s)", member, pool, ns)
+	}
+
+	m := toMember(*targetItem)
+	if m.AssignedTo == "" {
+		return m, fmt.Errorf("member %q is not assigned to any user (claim/assign first with `corral vdi assign`)", member)
+	}
+
+	if opts.User != "" && m.AssignedTo != opts.User {
+		return m, fmt.Errorf("authorization failed: member %q is assigned to %q, not %q", member, m.AssignedTo, opts.User)
+	}
+
+	if !m.Running {
+		return m, fmt.Errorf("member %q is stopped; start it before redirecting USB devices", member)
+	}
+
+	return m, nil
+}
+
+// BuildVirtctlUSBCmd constructs the virtctl usbredir command.
+func BuildVirtctlUSBCmd(virtctlPath, member, namespace, deviceSelector, kubeContext string) *exec.Cmd {
+	args := []string{"usbredir", member, "-n", namespace}
+	if deviceSelector != "" {
+		args = append(args, "--device="+deviceSelector)
+	}
+	return shell.CommandForContext(kubeContext, virtctlPath, args...)
 }
