@@ -1,6 +1,6 @@
 # Show HN draft
 
-> **Title:** Show HN: Corral – Proxmox-style VM manager for KubeVirt, QEMU, Incus and libvirt, one Go binary
+> **Title:** Show HN: Corral – Proxmox-style VM manager for KubeVirt, QEMU, Incus, libvirt and Proxmox, one Go binary
 >
 > **URL:** https://github.com/tuna-os/corral
 
@@ -65,12 +65,13 @@ guest stops, and `migrate` still means the live within-one-backend kind. The
 preflight refuses before anything is touched, and reports every reason at once
 — firmware mismatch, disk bus and virtio drivers, free space, and the fact
 that the guest comes up with a new MAC and almost certainly a new IP. The
-source is left stopped, never deleted, unless you pass `--delete-source`. Incus
-is a fine source and is refused as a destination, because importing a raw disk
-into it would look like it worked and then behave unlike every other Incus
-instance.
+source is left stopped, never deleted, unless you pass `--delete-source`. All
+five backends can now be a destination: Incus was the last holdout, and it
+receives a move by publishing the disk as an Incus image and launching from it,
+rather than attaching a foreign disk to an empty instance — which would have
+looked like it worked and then behaved unlike every other Incus instance.
 
-Honest state of things: v0.6.x, about eleven weeks old, one developer plus a
+Honest state of things: v0.6.x, about twelve weeks old, one developer plus a
 lot of Claude. KubeVirt is still the most exercised path, but local QEMU, Incus
 and libvirt have caught up on the basics — inventory, create, lifecycle,
 snapshots, export — and local QEMU in the web UI is finished: lifecycle, info,
@@ -90,7 +91,8 @@ Apache-2.0. Happy to answer anything.
 - Submit morning US Eastern, Tue–Thu; have the `--demo` GIF at the top of the
   README before submitting (done).
 - Re-check the version and age line immediately before posting. It was
-  accurate at v0.6.0 (tagged 2026-08-06) against a repo created 2026-06-10.
+  accurate at v0.6.0 (tagged 2026-08-06) against a repo created 2026-06-10;
+  the age line was last refreshed 2026-09-02.
 - Expected pushback to be ready for: "why not just virt-manager/Cockpit?"
   (answer: cluster, laptop, Incus, libvirt and PVE aggregated as one fleet,
   tailnet-native, bootc), "web UI with no auth?" (answer: binds loopback by
