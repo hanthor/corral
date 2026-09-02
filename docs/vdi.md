@@ -99,6 +99,26 @@ corral vdi unassign devpool-1
 corral vdi pool delete devpool
 ```
 
+## Session and reclaim policy
+
+Session state is separate from Lease ownership. A console `connect` records
+presence; `disconnect` records loss of presence and starts a configurable
+grace timer. Reconnecting the same owner cancels that pending reclaim.
+Explicit release is immediate, and an optional maximum session duration is
+enforced even while connected. Reclaim is deterministic and audited:
+
+- persistent members are stopped and keep their disks;
+- ephemeral members are recreated by the embedding broker from their golden
+  source; and
+- a lifecycle failure leaves the session claim in place for retry rather than
+  silently making the member available.
+
+The session manager does not infer abandonment after a broker restart merely
+because its in-memory map is empty; session records must be restored by the
+broker. Administrator force-release is a distinct audited operation. True
+keyboard/mouse idle reclaim requires an optional guest or protocol activity
+signal and is not implemented here. Websocket age is not user activity.
+
 ## What "connect" actually does today
 
 `corral vdi connect <member>` prints instructions — it does **not** yet
