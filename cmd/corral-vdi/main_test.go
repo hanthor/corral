@@ -180,8 +180,6 @@ func TestUsbRedirCmd_UnsupportedContext(t *testing.T) {
 	}
 }
 
-
-
 func TestPoolCreateCmd_RequiresFrom(t *testing.T) {
 	c := poolCreateCmd()
 	if c.Flags().Lookup("from").DefValue != "" {

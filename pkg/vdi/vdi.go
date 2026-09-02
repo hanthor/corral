@@ -583,4 +583,3 @@ func BuildVirtctlUSBCmd(virtctlPath, member, namespace, deviceSelector, kubeCont
 	}
 	return shell.CommandForContext(kubeContext, virtctlPath, args...)
 }
-

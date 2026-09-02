@@ -395,4 +395,3 @@ func TestListLocalUSBDevices_Seam(t *testing.T) {
 type fakeErr struct{ msg string }
 
 func (e *fakeErr) Error() string { return e.msg }
-
