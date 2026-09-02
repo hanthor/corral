@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tuna-os/corral/pkg/shell"
@@ -9,7 +10,7 @@ import (
 
 func TestRootCmd_Subcommands(t *testing.T) {
 	root := rootCmd()
-	for _, want := range []string{"pool", "assign", "unassign", "connect"} {
+	for _, want := range []string{"pool", "assign", "unassign", "connect", "usb"} {
 		c, _, err := root.Find([]string{want})
 		if err != nil || c == root {
 			t.Errorf("missing subcommand %q", want)
@@ -24,6 +25,158 @@ func TestPoolCmd_Subcommands(t *testing.T) {
 		if err != nil || c == pool {
 			t.Errorf("pool: missing subcommand %q", want)
 		}
+	}
+}
+
+func TestUsbCmd_Subcommands(t *testing.T) {
+	usb := usbCmd()
+	for _, want := range []string{"list", "redir"} {
+		c, _, err := usb.Find([]string{want})
+		if err != nil || c == usb {
+			t.Errorf("usb: missing subcommand %q", want)
+		}
+	}
+}
+
+func TestUsbListCmd(t *testing.T) {
+	orig := vdi.ListUSBDevicesFunc
+	defer func() { vdi.ListUSBDevicesFunc = orig }()
+	vdi.ListUSBDevicesFunc = func() ([]vdi.USBDevice, error) {
+		return []vdi.USBDevice{
+			{
+				BusNum:      "3",
+				DevNum:      "2",
+				VendorID:    "1050",
+				ProductID:   "0407",
+				Description: "YubiKey",
+			},
+		}, nil
+	}
+
+	cmd := usbListCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("usb list: %v", err)
+	}
+}
+
+func TestUsbRedirCmd_RequiresMemberArg(t *testing.T) {
+	c := usbRedirCmd()
+	if c.Args == nil {
+		t.Error("usb redir should require exact args")
+	}
+}
+
+func TestUsbRedirCmd_ValidationFailure(t *testing.T) {
+	fake := shell.NewFake()
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", "corral.dev/vdi-pool=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"bob"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+	vdi.SetRunner(fake)
+	defer vdi.SetRunner(shell.Real{})
+
+	orig := vdi.ListUSBDevicesFunc
+	defer func() { vdi.ListUSBDevicesFunc = orig }()
+	vdi.ListUSBDevicesFunc = func() ([]vdi.USBDevice, error) {
+		return []vdi.USBDevice{
+			{
+				BusNum:      "3",
+				DevNum:      "2",
+				VendorID:    "1050",
+				ProductID:   "0407",
+				Description: "YubiKey",
+			},
+		}, nil
+	}
+
+	c := usbRedirCmd()
+	c.Flags().Set("user", "alice")
+	c.Flags().Set("yes", "true")
+	namespace = "corral-vms"
+	defer func() { namespace = "" }()
+
+	err := c.RunE(c, []string{"devpool-1"})
+	if err == nil || !strings.Contains(err.Error(), "authorization failed") {
+		t.Fatalf("expected authorization error, got: %v", err)
+	}
+}
+
+func TestUsbRedirCmd_DeviceNotFound(t *testing.T) {
+	fake := shell.NewFake()
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", "corral.dev/vdi-pool=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"alice"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+	vdi.SetRunner(fake)
+	defer vdi.SetRunner(shell.Real{})
+
+	orig := vdi.ListUSBDevicesFunc
+	defer func() { vdi.ListUSBDevicesFunc = orig }()
+	vdi.ListUSBDevicesFunc = func() ([]vdi.USBDevice, error) {
+		return []vdi.USBDevice{}, nil
+	}
+
+	c := usbRedirCmd()
+	c.Flags().Set("device", "9999:9999")
+	c.Flags().Set("yes", "true")
+	namespace = "corral-vms"
+	defer func() { namespace = "" }()
+
+	err := c.RunE(c, []string{"devpool-1"})
+	if err == nil || !strings.Contains(err.Error(), "not found on local host") {
+		t.Fatalf("expected device not found error, got: %v", err)
+	}
+}
+
+func TestUsbRedirCmd_BusyDevice(t *testing.T) {
+	fake := shell.NewFake()
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "devpool-1", "-n", "corral-vms", "-o", `jsonpath={.metadata.labels.corral\.dev/vdi-pool}`}, "devpool", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", "corral.dev/vdi-pool=devpool"}, `{"items":[
+		{"metadata":{"name":"devpool-1","namespace":"corral-vms","labels":{"corral.dev/vdi-pool":"devpool","corral.dev/vdi-assigned-to":"alice"}},
+			"status":{"printableStatus":"Running"}}
+	]}`, nil)
+	vdi.SetRunner(fake)
+	defer vdi.SetRunner(shell.Real{})
+
+	orig := vdi.ListUSBDevicesFunc
+	defer func() { vdi.ListUSBDevicesFunc = orig }()
+	vdi.ListUSBDevicesFunc = func() ([]vdi.USBDevice, error) {
+		return []vdi.USBDevice{
+			{
+				BusNum:      "1",
+				DevNum:      "1",
+				VendorID:    "1d6b",
+				ProductID:   "0002",
+				Description: "Linux Foundation root hub",
+				Busy:        true,
+				BusyReason:  "USB root hub cannot be redirected",
+			},
+		}, nil
+	}
+
+	c := usbRedirCmd()
+	c.Flags().Set("device", "1d6b:0002")
+	c.Flags().Set("yes", "true")
+	namespace = "corral-vms"
+	defer func() { namespace = "" }()
+
+	err := c.RunE(c, []string{"devpool-1"})
+	if err == nil || !strings.Contains(err.Error(), "is busy") {
+		t.Fatalf("expected busy device error, got: %v", err)
+	}
+}
+
+func TestUsbRedirCmd_UnsupportedContext(t *testing.T) {
+	c := usbRedirCmd()
+	c.Flags().Set("yes", "true")
+	contextName = "nonexistent-ctx-12345"
+	defer func() { contextName = "" }()
+
+	err := c.RunE(c, []string{"devpool-1"})
+	if err == nil || !strings.Contains(err.Error(), "unknown context") {
+		t.Fatalf("expected unknown context error, got: %v", err)
 	}
 }
 

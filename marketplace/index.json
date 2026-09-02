@@ -91,8 +91,8 @@
     {
       "name": "vdi",
 	  "supportedBackends": ["kubevirt"],
-      "description": "Desktop pools (RFC-0001, Phase 1) — clone an already-built VM into a pool, assign members to users, connect. Run `corral vdi pool create <name> --from <golden-vm> --size N`, `corral vdi assign <pool> <user>`, `corral vdi connect <member>`. See docs/vdi.md for the full setup guide.",
-      "version": "0.1.0",
+      "description": "Desktop pools and native USB redirection (RFC-0001) — clone an already-built VM into a pool, assign members to users, connect, and redirect local USB devices. Run `corral vdi pool create <name> --from <golden-vm> --size N`, `corral vdi assign <pool> <user>`, `corral vdi usb list`, `corral vdi usb redir <member>`. See docs/vdi.md for the full setup guide.",
+      "version": "0.2.0",
       "homepage": "https://github.com/tuna-os/corral/tree/main/cmd/corral-vdi",
       "platforms": {
         "linux/amd64": { "url": "https://github.com/tuna-os/corral/releases/download/plugins/corral-vdi-linux-amd64" },
