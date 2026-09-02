@@ -222,6 +222,41 @@ func TestPoolCreateCmd_Success(t *testing.T) {
 	}
 }
 
+func TestPoolCreateCmd_GPUCapacityRefusal(t *testing.T) {
+	fake := shell.NewFake()
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "name"}, "vm/golden-gpu", nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vm", "golden-gpu", "-n", "corral-vms", "-o", "json"}, `{
+	  "metadata": {"name": "golden-gpu", "namespace": "corral-vms"},
+	  "spec": {
+	    "template": {
+	      "spec": {
+	        "domain": {
+	          "devices": {
+	            "gpus": [{"name": "gpu1", "deviceName": "nvidia.com/gpu"}]
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "json"}, `{"spec":{}}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "nodes", "-o", "json"}, `{"items":[]}`, nil)
+	fake.AddResponseKV("kubectl", []string{"get", "vmi", "-A", "-o", "json"}, `{"items":[]}`, nil)
+	vdi.SetRunner(fake)
+	defer vdi.SetRunner(shell.Real{})
+
+	namespace = "corral-vms"
+	defer func() { namespace = "" }()
+
+	c := poolCreateCmd()
+	c.Flags().Set("from", "golden-gpu")
+	c.Flags().Set("size", "1")
+	err := c.RunE(c, []string{"gpupool"})
+	if err == nil || !strings.Contains(err.Error(), "device admission failed") {
+		t.Fatalf("expected device admission failure, got: %v", err)
+	}
+}
+
 func TestPoolListCmd_Empty(t *testing.T) {
 	fake := shell.NewFake()
 	fake.AddResponseKV("kubectl", []string{"get", "vm", "-A", "-o", "json", "-l", "corral.dev/vdi-pool"}, `{"items":[]}`, nil)
