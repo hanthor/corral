@@ -105,6 +105,10 @@ func newMux() (http.Handler, error) {
 	// has a tailnet-gated metrics endpoint (ADR-0011).
 	mux.HandleFunc("GET /metrics", handleMetricsExposition)
 
+	// Health and readiness endpoints for orchestrator probes (liveness/readiness).
+	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("GET /readyz", handleReadyz)
+
 	mux.HandleFunc("GET /api/whoami", handleWhoami)
 	mux.HandleFunc("GET /api/theme", handleGetTheme)
 	mux.HandleFunc("PUT /api/theme", handlePutTheme)
@@ -311,6 +315,28 @@ func remoteErrors(errs map[string]string) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "; ")
+}
+
+func handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+func handleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if store == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "not_ready",
+			"error":  "registry store not initialized",
+		})
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ready",
+	})
 }
 
 func handleInventory(w http.ResponseWriter, r *http.Request) {
