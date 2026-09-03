@@ -488,3 +488,72 @@ func TestDocsGapCountsMatchTheMatrix(t *testing.T) {
 		}
 	}
 }
+
+// TestKubevirtBranchingRatchet enforces that residual direct string comparisons
+// against "kubevirt" outside pkg/backend and pkg/kubevirt do not exceed the ratchet ceiling.
+// As call sites are migrated to backend.Adapter and capability interfaces, lower this ceiling.
+func TestKubevirtBranchingRatchet(t *testing.T) {
+	// Root directory of the repository is two levels up from pkg/backend
+	rootDir := filepath.Join("..", "..")
+	
+	// Max allowed residual "kubevirt" comparisons outside pkg/backend and pkg/kubevirt
+	const ratchetCeiling = 40
+
+	var branchCount int
+	var occurrences []string
+
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" || info.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(rootDir, path)
+		if err != nil {
+			return err
+		}
+		cleanRel := filepath.ToSlash(relPath)
+		if strings.HasPrefix(cleanRel, "pkg/backend/") || cleanRel == "pkg/backend" ||
+			strings.HasPrefix(cleanRel, "pkg/kubevirt/") || cleanRel == "pkg/kubevirt" {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		lines := strings.Split(string(content), "\n")
+		for lineIdx, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			if strings.Contains(line, `== "kubevirt"`) ||
+				strings.Contains(line, `case "kubevirt":`) ||
+				strings.Contains(line, `== `+"`kubevirt`") ||
+				strings.Contains(line, `case `+"`kubevirt`:") {
+				branchCount++
+				occurrences = append(occurrences, fmt.Sprintf("%s:%d: %s", cleanRel, lineIdx+1, trimmed))
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("walking repository files: %v", err)
+	}
+
+	if branchCount > ratchetCeiling {
+		t.Errorf("residual kubevirt branches count %d exceeds ratchet ceiling %d.\nOccurrences:\n%s",
+			branchCount, ratchetCeiling, strings.Join(occurrences, "\n"))
+	}
+}
