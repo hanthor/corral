@@ -1,0 +1,32 @@
+groups:
+  - name: corral-fleet-alerts
+    rules:
+      - alert: CorralCollectionFailed
+        expr: corral_collection_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Corral fleet metrics collection failing"
+          description: "Corral background metrics collection loop failed or has not run for 2 minutes."
+          runbook_url: "https://github.com/tuna-os/corral/blob/main/runbooks/corral-fleet-collection.md#1-corral_collection_success--0"
+
+      - alert: CorralCollectionStale
+        expr: corral_collection_age_seconds > 120
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Corral metrics snapshot is stale"
+          description: "Corral fleet metrics collection age is {{ $value }}s, exceeding 120s threshold."
+          runbook_url: "https://github.com/tuna-os/corral/blob/main/runbooks/corral-fleet-collection.md#summary"
+
+      - alert: CorralBackendDown
+        expr: corral_backend_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Corral backend context {{ $labels.context }} unreachable"
+          description: "Backend {{ $labels.backend }} context {{ $labels.context }} failed during fleet metrics fan-out."
+          runbook_url: "https://github.com/tuna-os/corral/blob/main/runbooks/corral-fleet-collection.md#2-corral_backend_upcontextname--0"
