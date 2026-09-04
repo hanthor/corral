@@ -497,4 +497,3 @@ func TestContextManagement(t *testing.T) {
 		t.Error("HasBackend('incus') want false after removal")
 	}
 }
-
