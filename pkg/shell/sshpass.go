@@ -15,8 +15,9 @@ func RunWithSSHPass(password, bin string, args ...string) error {
 	if err != nil {
 		return fmt.Errorf("sshpass not found (needed for password auth) — install: brew install sshpass")
 	}
-	allArgs := append([]string{"-p", password, bin}, args...)
+	allArgs := append([]string{"-e", bin}, args...)
 	cmd := exec.Command(sshpass, allArgs...)
+	cmd.Env = append(os.Environ(), "SSHPASS="+password)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
