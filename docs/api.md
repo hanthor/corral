@@ -539,6 +539,15 @@ kept unless `deleteSource` is set.
 
 ---
 
+## Health and readiness
+
+| Method | Route | Notes |
+|---|---|---|
+| `GET` | `/healthz` | Liveness probe endpoint. Returns `200 OK` (`ok\n`) when HTTP server is responding |
+| `GET` | `/readyz` | Readiness probe endpoint. Returns `200 OK` (`{"status":"ready"}`) if the registry store is initialized; returns `503 Service Unavailable` if unready |
+
+---
+
 ## Metrics
 
 | Method | Route | Notes |

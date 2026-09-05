@@ -13,6 +13,7 @@ import (
 
 	"github.com/tuna-os/corral/pkg/config"
 	"github.com/tuna-os/corral/pkg/kubevirt"
+	"github.com/tuna-os/corral/pkg/registry"
 )
 
 // forceKubevirt makes config.Contexts() offer a kubevirt target for the
@@ -58,6 +59,8 @@ func TestAllRoutesRegistered(t *testing.T) {
 	defer srv.Close()
 
 	routes := []struct{ method, path string }{
+		{"GET", "/healthz"},
+		{"GET", "/readyz"},
 		{"GET", "/api/vms"},
 		{"POST", "/api/vms"},
 		{"GET", "/api/nodes"},
@@ -1034,4 +1037,73 @@ func TestHandleExport_StoppedVM(t *testing.T) {
 	}
 	// Export will fail later (virtctl not available) but the handler shouldn't return 409
 	t.Logf("export stopped VM returned %d", resp.StatusCode)
+}
+
+func TestHealthz(t *testing.T) {
+	mux, err := newMux()
+	if err != nil {
+		t.Fatalf("newMux: %v", err)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "ok\n" {
+		t.Errorf("GET /healthz body = %q, want %q", string(body), "ok\n")
+	}
+}
+
+func TestReadyz(t *testing.T) {
+	mux, err := newMux()
+	if err != nil {
+		t.Fatalf("newMux: %v", err)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// 1. When store is nil
+	origStore := store
+	store = nil
+	defer func() { store = origStore }()
+
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("GET /readyz (nil store) = %d, want 503", resp.StatusCode)
+	}
+
+	// 2. When store is initialized
+	tmpDir := t.TempDir()
+	store = registry.NewStoreAt(filepath.Join(tmpDir, "registry.json"))
+
+	resp2, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("GET /readyz (initialized store) = %d, want 200", resp2.StatusCode)
+	}
+	var res map[string]any
+	if err := json.NewDecoder(resp2.Body).Decode(&res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res["status"] != "ready" {
+		t.Errorf("status = %v, want ready", res["status"])
+	}
 }

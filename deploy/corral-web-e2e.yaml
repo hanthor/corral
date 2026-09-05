@@ -48,11 +48,18 @@ spec:
           ports:
             - containerPort: 8006
               name: http
-          readinessProbe:
+          livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: 8006
             initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8006
+            initialDelaySeconds: 2
+            periodSeconds: 5
           resources:
             requests:
               cpu: 50m
