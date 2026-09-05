@@ -1,20 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
+    "local>tuna-os/.github",
+    "local>tuna-os/.github",
     "helpers:pinGitHubActionDigests"
-  ],
-  "automerge": false,
-  "platformAutomerge": true,
-  "packageRules": [
-    {
-      "matchUpdateTypes": [
-        "patch",
-        "pin",
-        "pinDigest",
-        "digest"
-      ],
-      "automerge": true
-    }
   ]
 }
