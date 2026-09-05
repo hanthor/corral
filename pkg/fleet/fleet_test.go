@@ -6,6 +6,9 @@ package fleet
 // matter and were previously only spot-covered.
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,5 +121,68 @@ func TestResolve_MultipleMatchesSameVM(t *testing.T) {
 	}
 	if got.ID != "dev" {
 		t.Errorf("got %+v, want the dev VM", got)
+	}
+}
+
+func TestList_EmptyLocalQemu(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+	t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent"))
+
+	res := List(context.Background())
+	if len(res.Errors) != 0 {
+		t.Errorf("expected no errors for empty local qemu, got: %v", res.Errors)
+	}
+	if len(res.VMs) != 0 {
+		t.Errorf("expected 0 VMs, got %d", len(res.VMs))
+	}
+}
+
+func TestList_ContextCanceled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+	t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	res := List(ctx)
+	if len(res.Errors) == 0 {
+		t.Fatal("expected errors when context is canceled, got none")
+	}
+	if !strings.Contains(res.Errors["local"], "context canceled") {
+		t.Errorf("expected context canceled error, got: %v", res.Errors)
+	}
+}
+
+func TestList_UnsupportedBackend(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+	t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	t.Setenv("KUBECONFIG", filepath.Join(home, "nonexistent"))
+
+	// Create config with unsupported backend manually
+	configDir := filepath.Join(home, ".config", "corral")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `
+contexts:
+  - name: weird-target
+    backend: unsupported-xyz
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := List(context.Background())
+	if res.Errors == nil || !strings.Contains(res.Errors["weird-target"], "unsupported backend") {
+		t.Errorf("expected unsupported backend error for weird-target, got: %v", res.Errors)
 	}
 }

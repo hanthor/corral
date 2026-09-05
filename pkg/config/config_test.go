@@ -304,3 +304,196 @@ func TestContexts_KubevirtNeedsAKubeconfig(t *testing.T) {
 		}
 	})
 }
+
+func TestPeers_SetAndRemove(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if len(Peers()) != 0 {
+		t.Errorf("expected 0 peers initially, got %d", len(Peers()))
+	}
+
+	if err := SetPeer("peer-a", "http://10.0.0.1:8080/"); err != nil {
+		t.Fatalf("SetPeer: %v", err)
+	}
+	if err := SetPeerWithToken("peer-b", "https://peer-b.example.com", "secret-token"); err != nil {
+		t.Fatalf("SetPeerWithToken: %v", err)
+	}
+
+	peers := Peers()
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d", len(peers))
+	}
+	if peers[0].Name != "peer-a" || peers[0].URL != "http://10.0.0.1:8080" {
+		t.Errorf("unexpected peer-a: %+v", peers[0])
+	}
+	if peers[1].Name != "peer-b" || peers[1].Token != "secret-token" {
+		t.Errorf("unexpected peer-b: %+v", peers[1])
+	}
+
+	// Update existing peer
+	if err := SetPeerWithToken("peer-a", "http://10.0.0.1:9090", "new-token"); err != nil {
+		t.Fatalf("SetPeerWithToken update: %v", err)
+	}
+	peers = Peers()
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers after update, got %d", len(peers))
+	}
+	if peers[0].URL != "http://10.0.0.1:9090" || peers[0].Token != "new-token" {
+		t.Errorf("peer-a not updated: %+v", peers[0])
+	}
+
+	// Remove peer
+	if err := RemovePeer("peer-a"); err != nil {
+		t.Fatalf("RemovePeer: %v", err)
+	}
+	peers = Peers()
+	if len(peers) != 1 || peers[0].Name != "peer-b" {
+		t.Errorf("expected 1 peer-b remaining, got %+v", peers)
+	}
+
+	// Error cases
+	if err := SetPeer("", "http://url"); err == nil {
+		t.Error("expected error for empty peer name")
+	}
+	if err := SetPeer("name", ""); err == nil {
+		t.Error("expected error for empty peer url")
+	}
+}
+
+func TestFolders_SetAndGet(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if folders := Folders(); len(folders) != 0 {
+		t.Errorf("expected nil/empty folders, got %+v", folders)
+	}
+
+	newFolders := []FolderConfig{
+		{Path: "/dev", Members: []string{"qemu.local.dev1", "qemu.local.dev2"}},
+		{Path: "/prod", Members: []string{"kubevirt.lab.prod1"}},
+	}
+	if err := SetFolders(newFolders); err != nil {
+		t.Fatalf("SetFolders: %v", err)
+	}
+
+	got := Folders()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 folders, got %d", len(got))
+	}
+	if got[0].Path != "/dev" || len(got[0].Members) != 2 {
+		t.Errorf("unexpected folder 0: %+v", got[0])
+	}
+}
+
+func TestDefaultBackend_AndContext(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_DEFAULT_BACKEND", "")
+
+	if b := DefaultBackend(); b != "qemu" {
+		t.Errorf("DefaultBackend() = %q, want qemu", b)
+	}
+
+	if err := SetDefaultBackend("kubevirt"); err != nil {
+		t.Fatalf("SetDefaultBackend: %v", err)
+	}
+	if b := DefaultBackend(); b != "kubevirt" {
+		t.Errorf("DefaultBackend() = %q, want kubevirt", b)
+	}
+
+	if err := SetDefaultBackend("invalid-backend"); err == nil {
+		t.Error("expected error setting invalid backend")
+	}
+
+	// Env override
+	t.Setenv("CORRAL_DEFAULT_BACKEND", "incus")
+	if b := DefaultBackend(); b != "incus" {
+		t.Errorf("DefaultBackend() = %q, want incus from env", b)
+	}
+}
+
+func TestIncusRemote_AndLibvirtURI(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+
+	if r := IncusRemote(); r != "local" {
+		t.Errorf("IncusRemote() = %q, want local", r)
+	}
+	if err := SetIncusRemote("remote-incus"); err != nil {
+		t.Fatalf("SetIncusRemote: %v", err)
+	}
+	if r := IncusRemote(); r != "remote-incus" {
+		t.Errorf("IncusRemote() = %q, want remote-incus", r)
+	}
+
+	if u := LibvirtURI(); u != "qemu:///system" {
+		t.Errorf("LibvirtURI() = %q, want qemu:///system", u)
+	}
+	if err := SetLibvirtURI("qemu+ssh://server/system"); err != nil {
+		t.Fatalf("SetLibvirtURI: %v", err)
+	}
+	if u := LibvirtURI(); u != "qemu+ssh://server/system" {
+		t.Errorf("LibvirtURI() = %q, want qemu+ssh://server/system", u)
+	}
+}
+
+func TestTailnetSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_TAILNET_EXPOSE", "")
+	t.Setenv("CORRAL_TAILNET_TAGS", "")
+
+	if TailnetExpose() {
+		t.Error("TailnetExpose() should default to false")
+	}
+	if tags := TailnetTags(); tags != "" {
+		t.Errorf("TailnetTags() = %q, want empty", tags)
+	}
+
+	t.Setenv("CORRAL_TAILNET_EXPOSE", "true")
+	t.Setenv("CORRAL_TAILNET_TAGS", "tag:corral-dev,tag:test")
+
+	if !TailnetExpose() {
+		t.Error("TailnetExpose() should be true from env")
+	}
+	if tags := TailnetTags(); tags != "tag:corral-dev,tag:test" {
+		t.Errorf("TailnetTags() = %q, want tag:corral-dev,tag:test", tags)
+	}
+}
+
+func TestContextManagement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CORRAL_INCUS_REMOTE", "")
+	t.Setenv("CORRAL_LIBVIRT_URI", "")
+	t.Setenv("CORRAL_KUBE_CONTEXT", "")
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent"))
+
+	if err := AddContext(ContextConfig{Name: "", Backend: "qemu"}); err == nil {
+		t.Error("expected error adding context with empty name")
+	}
+	if err := AddContext(ContextConfig{Name: "bad-qemu", Backend: "qemu", Context: "remote"}); err == nil {
+		t.Error("expected error adding qemu context with non-empty Context field")
+	}
+	if err := AddContext(ContextConfig{Name: "bad-backend", Backend: "unknown"}); err == nil {
+		t.Error("expected error adding context with unknown backend")
+	}
+
+	if err := RemoveContext("local"); err == nil {
+		t.Error("expected error removing local context")
+	}
+
+	if err := AddContext(ContextConfig{Name: "my-incus", Backend: "incus", Context: "remote-incus"}); err != nil {
+		t.Fatalf("AddContext: %v", err)
+	}
+	if !HasBackend("incus") {
+		t.Error("HasBackend('incus') want true")
+	}
+	if HasBackend("proxmox") {
+		t.Error("HasBackend('proxmox') want false")
+	}
+
+	if err := RemoveContext("my-incus"); err != nil {
+		t.Fatalf("RemoveContext: %v", err)
+	}
+	if HasBackend("incus") {
+		t.Error("HasBackend('incus') want false after removal")
+	}
+}
