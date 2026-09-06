@@ -1,0 +1,35 @@
+# Optional: scrape config for a Prometheus Operator install (kube-prometheus-
+# stack or similar). Apply this only if the ServiceMonitor CRD is already
+# present in the cluster — `kubectl apply` on it otherwise fails with
+# "no matches for kind ServiceMonitor".
+#
+# Requires deploy/corral-web.yaml's Deployment to pass --metrics (it does by
+# default); without that flag /metrics never renders more than
+# corral_collection_success 0.
+#
+# Adjust `metadata.labels` on the ServiceMonitor to match whatever
+# `serviceMonitorSelector` your Prometheus resource uses — kube-prometheus-stack
+# defaults to selecting every ServiceMonitor in the cluster, but some installs
+# scope it to a label such as `release: <helm-release-name>`.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: corral-web
+  namespace: corral
+  labels:
+    app: corral-web
+spec:
+  selector:
+    matchLabels:
+      app: corral-web
+  namespaceSelector:
+    matchNames:
+      - corral
+  endpoints:
+    - port: http
+      path: /metrics
+      # Matches metricsInterval in pkg/web/prometheus.go: scraping faster than
+      # the collector refreshes only re-reads the same snapshot.
+      interval: 30s
+      scrapeTimeout: 10s

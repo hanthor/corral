@@ -1,0 +1,64 @@
+# Optional: alert rules for a Prometheus Operator install. Apply only if the
+# PrometheusRule CRD is present, alongside deploy/corral-web-servicemonitor.yaml.
+#
+# Scoped to the collection-health and reachability metrics pkg/web/prometheus.go
+# documents as the ones an operator should alert on (see the package comment on
+# corral_collection_age_seconds and corral_backend_up) — not to a specific fleet
+# shape, since pool/backend layout is per-deployment.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: corral-web
+  namespace: corral
+  labels:
+    app: corral-web
+spec:
+  groups:
+    - name: corral-web.rules
+      rules:
+        - alert: CorralCollectionFailing
+          expr: corral_collection_success == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Corral's fleet collector is failing or has never run"
+            description: >-
+              corral_collection_success has been 0 for 5m on {{ $labels.instance }}.
+              The web UI and /metrics are serving a stale or empty fleet view.
+
+        - alert: CorralCollectionStale
+          expr: corral_collection_age_seconds > 180
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Corral's fleet snapshot is stale"
+            description: >-
+              corral_collection_age_seconds is {{ $value }}s on {{ $labels.instance }}
+              (collector runs every 30s — see metricsInterval in pkg/web/prometheus.go).
+              A frozen collector looks identical to a stable fleet everywhere except here.
+
+        - alert: CorralBackendUnreachable
+          expr: corral_backend_up == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Corral cannot reach a configured backend context"
+            description: >-
+              corral_backend_up{context="{{ $labels.context }}",backend="{{ $labels.backend }}"}
+              has been 0 for 10m — instances on this context are absent from the
+              aggregated fleet, not actually gone.
+
+        - alert: CorralRequiredCheckFailing
+          expr: corral_check{severity="required"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "A required corral doctor check is failing"
+            description: >-
+              corral_check{name="{{ $labels.name }}",backend="{{ $labels.backend }}",context="{{ $labels.context }}"}
+              is 0 with severity=required for 10m.

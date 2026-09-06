@@ -157,6 +157,11 @@ spec:
         - name: corral-web
           image: ghcr.io/tuna-os/corral:latest
           imagePullPolicy: Always
+          # --metrics starts the background fleet collector and serves
+          # Prometheus text exposition on /metrics (ADR-0011, pkg/web/prometheus.go).
+          # Without it the endpoint exists but always renders corral_collection_success 0:
+          # the collector that would populate it never runs.
+          args: ["--metrics"]
           env:
             # This deployment manages its Kubernetes cluster by default. Other
             # configured contexts remain visible in the aggregated inventory.

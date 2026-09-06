@@ -1,0 +1,117 @@
+{
+  "title": "Corral fleet",
+  "uid": "corral-fleet",
+  "description": "Fleet health from the corral-web /metrics endpoint (ADR-0011). Import with the Prometheus datasource that scrapes corral-web selected as the dashboard's default datasource.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "tags": ["corral"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Collector healthy",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "corral_collection_success", "legendFormat": "success" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FAILING", "color": "red" }, "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Snapshot age",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "corral_collection_age_seconds", "legendFormat": "age" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "value": null, "color": "green" }, { "value": 90, "color": "yellow" }, { "value": 180, "color": "red" }]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Collection duration",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "corral_collection_duration_seconds", "legendFormat": "duration" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 4,
+      "title": "Instances (total)",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "expr": "sum(corral_instances)", "legendFormat": "instances" }]
+    },
+    {
+      "id": 5,
+      "title": "Backend reachability",
+      "type": "table",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 4 },
+      "targets": [{ "expr": "corral_backend_up", "format": "table", "instant": true }]
+    },
+    {
+      "id": 6,
+      "title": "Required doctor checks",
+      "type": "table",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 4 },
+      "targets": [{ "expr": "corral_check{severity=\"required\"} == 0", "format": "table", "instant": true }]
+    },
+    {
+      "id": 7,
+      "title": "Instances by backend / state",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [{ "expr": "sum by (backend, state) (corral_instances)", "legendFormat": "{{backend}} / {{state}}" }]
+    },
+    {
+      "id": 8,
+      "title": "Running instances by pool",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        { "expr": "corral_pool_running", "legendFormat": "{{pool}} running" },
+        { "expr": "corral_pool_instances", "legendFormat": "{{pool}} total" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Recent tasks by action / status",
+      "type": "bargauge",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "targets": [{ "expr": "corral_tasks", "legendFormat": "{{action}} / {{status}}" }]
+    }
+  ]
+}
